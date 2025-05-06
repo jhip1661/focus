@@ -1,19 +1,20 @@
 import os
-
-print("📂 Current working directory:", os.getcwd())
-
 import json
 import datetime
 import gspread
+from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials as GCredentials
 from googleapiclient.discovery import build
+
+# ✅ .env 파일 로드
+load_dotenv()
 
 # 📁 구글 드라이브 및 시트 정보
 GSHEET_ID = "1lH1pZLYMEPab7zthSDYPpzumtIJOgzx-Iu1TBcqkFCQ"
 FOLDER_ID = '1bBeSUZJV7r2UyxvDiVZWMtp4FjwHo-l9'
 SHEET_NAME = 'image'
 
-# 🔐 인증 (환경변수 사용)
+# 🔐 인증 정보 로드 (.env에서 JSON 불러오기)
 creds_dict = json.loads(os.getenv("GSHEET_CREDENTIALS_JSON"))
 creds = GCredentials.from_service_account_info(
     creds_dict,

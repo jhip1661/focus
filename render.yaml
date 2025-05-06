@@ -1,42 +1,7 @@
 services:
   - type: cron
-    name: run-raindrop
-    schedule: "0 * * * *"
+    name: run-focus
+    schedule: "0 * * * *"  # 매시간 정각마다 실행 (UTC 기준)
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python raindrop.py"
-
-  - type: cron
-    name: run-publi-ad
-    schedule: "0 * * * *"
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python publi_ad.py"
-
-  - type: cron
-    name: run-xls
-    schedule: "5 * * * *"
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python xls.py"
-
-  - type: cron
-    name: run-image
-    schedule: "5 * * * *"
-    env: python
-    buildCommand: "echo '📦 Installing...' && pip install -r /opt/render/project/src/requirements.txt && echo '✅ pip install done'"
-    startCommand: "python image.py"
-
-  - type: cron
-    name: run-publi-sup
-    schedule: "10 * * * *"
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python publi_sup.py"
-
-  - type: cron
-    name: run-publi-xls
-    schedule: "10 * * * *"
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python publi_xls.py"
+    startCommand: "python focus.py"
