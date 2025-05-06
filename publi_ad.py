@@ -9,23 +9,19 @@ import difflib
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from dotenv import load_dotenv
-from openai import OpenAI
+import openai  # ✅ 수정된 부분
 
-# .env 파일 로드
-load_dotenv()
-
-# 환경 변수 설정
-CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
+# ✅ 환경변수 직접 사용 + \n 복원 처리
+CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
 SOURCE_DB_ID = os.getenv("SOURCE_DB_ID")
 TARGET_DB_ID = os.getenv("TARGET_DB_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+openai.api_key = OPENAI_API_KEY  # ✅ API 키 설정
+
 SIMILARITY_THRESHOLD = 0.6
 MAX_RETRIES = 5
 SELECT_COUNT = 5
-
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -59,15 +55,8 @@ def regenerate_unique_post(original_title: str, original: str, existing_texts: L
     for i in range(MAX_RETRIES):
         messages = build_messages_from_prompt(prompt_config, original_title, original)
         etc_lower = prompt_config[-1].lower()
-        if "3000자" in etc_lower:
-            max_tokens = 3000
-        elif "2500자" in etc_lower:
-            max_tokens = 2500
-        elif "2000자" in etc_lower:
-            max_tokens = 2000
-        else:
-            max_tokens = 3000
-        resp = client.chat.completions.create(
+        max_tokens = 3000 if "3000자" in etc_lower else 2500 if "2500자" in etc_lower else 2000
+        resp = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=messages,
             temperature=0.8,
@@ -82,7 +71,7 @@ def regenerate_unique_post(original_title: str, original: str, existing_texts: L
 
 def regenerate_title(content: str) -> str:
     system = "너는 광고, 홍보, 마케팅 콘텐츠 전문가야. 아래 내용을 보고 광고, 홍보, 마케팅을 흥미롭게 해서 소비자의 클릭을 유도하는 짧은 제목을 작성해줘."
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system},
@@ -95,7 +84,7 @@ def regenerate_title(content: str) -> str:
 
 def extract_tags(text: str) -> List[str]:
     prompt = f"다음 글에서 광고, 홍보, 마케팅의 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
@@ -109,7 +98,7 @@ def extract_tags(text: str) -> List[str]:
 def translate_text(text: str, lang: str) -> str:
     langs = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
     target = langs.get(lang, lang)
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": f"다음을 {target}로 번역해줘."},
@@ -145,7 +134,7 @@ def process_regeneration():
     info_ws = init_worksheet(TARGET_DB_ID, "advertising",
         ["작성일시", "제목", "내용", "태그", "영문", "중문", "일문", "표절률", "이미지url"])
 
-    rows = src_ws.get_all_values()[1:]  # 헤더 제외
+    rows = src_ws.get_all_values()[1:]
     filtered_rows = [r for r in rows if len(r) > 1 and r[1].strip().upper() == 'Y']
 
     selected = random.sample(filtered_rows, min(SELECT_COUNT, len(filtered_rows)))
@@ -189,7 +178,7 @@ def process_regeneration():
         except Exception as e:
             logging.error(f"❌ 시트 쓰기 실패: {e}")
 
-    logging.info(f"💰 예상 비용: ${round(total_tokens/1000 * 0.0015, 4)}")
+    logging.info(f"💰 예상 비용: ${round(total_tokens / 1000 * 0.0015, 4)}")
     return len(selected)
 
 if __name__ == "__main__":
