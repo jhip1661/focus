@@ -2,11 +2,11 @@ import os, json, datetime, time, requests, logging, gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai  # ✅ 수정됨
 
 # 📌 환경변수 로드 및 설정
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")  # ✅ 수정됨
 
 # 📌 환경변수 불러오기
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
@@ -87,13 +87,13 @@ def generate_blog_style_summary(title, url, text, tags):
 
     for _ in range(3):
         try:
-            res = client.chat.completions.create(
+            response = openai.ChatCompletion.create(  # ✅ 수정됨
                 model=GPT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2500,
                 temperature=0.7
             )
-            return res.choices[0].message.content.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"GPT 생성 실패, 재시도 중: {e}")
             time.sleep(3)
