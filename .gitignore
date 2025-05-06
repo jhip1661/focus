@@ -1,0 +1,8 @@
+# .env, .json 민감정보는 추적 금지
+.env
+*.json
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
