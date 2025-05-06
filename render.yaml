@@ -3,34 +3,40 @@ services:
     name: run-raindrop
     schedule: "0 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python raindrop.py"
 
   - type: cron
     name: run-publi-ad
     schedule: "0 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python publi_ad.py"
 
   - type: cron
     name: run-xls
     schedule: "5 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python xls.py"
 
   - type: cron
     name: run-image
     schedule: "5 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python image.py"
 
   - type: cron
     name: run-publi-sup
     schedule: "10 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python publi_sup.py"
 
   - type: cron
     name: run-publi-xls
     schedule: "10 * * * *"
     env: python
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python publi_xls.py"
