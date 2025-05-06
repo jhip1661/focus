@@ -1,18 +1,19 @@
 import os, json, datetime, time, requests, logging, gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
-from dotenv import load_dotenv
-import openai  # ✅ 수정됨
+import openai
 
-# 📌 환경변수 로드 및 설정
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")  # ✅ 수정됨
-
-# 📌 환경변수 불러오기
+# 📌 환경변수 불러오기 (Render 기준)
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
-GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
 GSHEET_ID = os.getenv("GSHEET_ID")
 GPT_MODEL = "gpt-3.5-turbo"
+
+# ✅ service account key에서 \n 복원
+GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON").replace('\\n', '\n')
+creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
+
+# ✅ OpenAI API Key 설정
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def extract_main_text(url):
     try:
@@ -26,7 +27,6 @@ def extract_main_text(url):
         return None
 
 def get_raindrop_prompt_by_tag(tags):
-    creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
     creds = GCredentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
@@ -51,11 +51,7 @@ def get_raindrop_prompt_by_tag(tags):
             else:
                 global_prompt = prompt_data
 
-    # 태그에 따라 프롬프트 분기
-    if domestic_tag in tags:
-        return domestic_prompt or global_prompt
-    else:
-        return global_prompt or domestic_prompt
+    return domestic_prompt if domestic_tag in tags else global_prompt or domestic_prompt
 
 def generate_blog_style_summary(title, url, text, tags):
     prompt_data = get_raindrop_prompt_by_tag(tags)
@@ -87,7 +83,7 @@ def generate_blog_style_summary(title, url, text, tags):
 
     for _ in range(3):
         try:
-            response = openai.ChatCompletion.create(  # ✅ 수정됨
+            response = openai.ChatCompletion.create(
                 model=GPT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2500,
@@ -100,7 +96,6 @@ def generate_blog_style_summary(title, url, text, tags):
     return "[GPT 생성 실패]"
 
 def append_to_fixed_sheet(row):
-    creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
     creds = GCredentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
