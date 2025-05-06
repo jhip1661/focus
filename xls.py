@@ -1,119 +1,203 @@
 import os
+import json
 import datetime
-import pandas as pd
-from openai import OpenAI
+import random
+import logging
+import re
+from typing import List, Tuple
+import difflib
+
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from google.oauth2.service_account import Credentials as GCredentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-import io
-import json
-from dotenv import load_dotenv
-load_dotenv()
+import OpenAI
 
+# 🔐 환경 변수에서 JSON 문자열 읽고 줄바꿈 처리
+CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
+SOURCE_DB_ID = os.getenv("SOURCE_DB_ID")
+TARGET_DB_ID = os.getenv("TARGET_DB_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-GOOGLE_DRIVE_FOLDER_ID = '1SNhQQEyyn9NveFOixl1Ef3PiZzd5vOdg'
-GSHEET_ID = '1lH1pZLYMEPab7zthSDYPpzumtIJOgzx-Iu1TBcqkFCQ'
-GSHEET_CREDENTIALS_JSON = os.getenv('GSHEET_CREDENTIALS_JSON')
-GPT_MODEL = 'gpt-3.5-turbo'
+SIMILARITY_THRESHOLD = 0.6
+MAX_RETRIES = 5
+SELECT_COUNT = 5
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-def get_drive_service():
-    creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
-    creds = GCredentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/drive"])
-    return build('drive', 'v3', credentials=creds)
-
-def list_excel_files_in_folder(folder_id):
-    service = get_drive_service()
-    query = f"'{folder_id}' in parents and trashed=false and mimeType contains 'spreadsheet'"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    return results.get('files', [])
-
-def download_excel_file(file_id):
-    service = get_drive_service()
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    fh.seek(0)
-    return fh
-
-def init_worksheet(sheet_id, worksheet_name, headers=None):
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    credentials_dict = json.loads(GSHEET_CREDENTIALS_JSON)
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
-    gc = gspread.authorize(credentials)
-    spreadsheet = gc.open_by_key(sheet_id)
+def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    credentials_dict = json.loads(CREDENTIALS_JSON)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+    client_gs = gspread.authorize(creds)
     try:
-        worksheet = spreadsheet.worksheet(worksheet_name)
+        ws = client_gs.open_by_key(sheet_id).worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows="1000", cols="20")
-    if headers:
-        current = worksheet.row_values(1)
-        if not current or current != headers:
-            worksheet.clear()
-            worksheet.append_row(headers)
-    return worksheet
+        ws = client_gs.open_by_key(sheet_id).add_worksheet(title=sheet_name, rows="1000", cols="20")
+    if header:
+        current = ws.get_all_values()
+        if not current or all(cell == '' for cell in current[0]):
+            ws.clear()
+            ws.append_row(header)
+    return ws
 
-def load_processed_excel_ids(sheet):
-    return set(row[0] for row in sheet.get_all_values()[1:])
+def calculate_similarity(text1: str, text2: str) -> float:
+    return difflib.SequenceMatcher(None, text1, text2).ratio()
 
-def save_processed_excel_id(sheet, file_id):
-    sheet.append_row([file_id])
+def clean_content(text: str) -> str:
+    cleaned = re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)[:\-]?\s*', '', text)
+    return cleaned.strip()
 
-def get_prompt_from_sheet(sheet, use_case="xls"):
-    rows = sheet.get_all_records()
-    for row in rows:
-        if row.get("출처") == use_case and row.get("현재사용여부") == "Y":
-            prompt = (
-                f"작성자 역할 설명: {row.get('작성자 역할 설명')}\n"
-                f"전체 작성 조건: {row.get('전체 작성 조건')}\n"
-                f"글 구성방식: {row.get('글 구성방식')}\n"
-                f"필수 포함 항목: {row.get('필수 포함 항목')}\n"
-                f"마무리 문장: {row.get('마무리 문장')}\n"
-                f"추가 지시사항: {row.get('추가 지시사항')}"
-            )
-            return prompt
-    return None
+def build_messages_from_prompt(prompt_config: List[str], title: str, content: str) -> List[dict]:
+    purpose, tone, para, emphasis, format_, etc = prompt_config
+    system_msg = f"""{purpose}\n\n{tone}\n\n{para}\n\n{emphasis}\n\n{format_}\n\n{etc}"""
+    user_msg = f"""다음 글을 중복되지 않도록 재작성해줘:\n\n제목: {title}\n내용: {content}"""
+    return [
+        {"role": "system", "content": system_msg.strip()},
+        {"role": "user", "content": user_msg.strip()}
+    ]
 
-def generate_post(title, body_text, prompt):
-    full_prompt = f"{prompt}\n\n제목: {title}\n본문: {body_text}\n이 내용을 바탕으로 블로그 글을 작성해 주세요."
-    response = client.chat.completions.create(
-        model=GPT_MODEL,
-        messages=[{"role": "user", "content": full_prompt}],
-        temperature=0.5,
-        max_tokens=2500
+def regenerate_unique_post(original_title: str, original: str, existing_texts: List[str], prompt_config: List[str]) -> Tuple[str, float, int]:
+    for i in range(MAX_RETRIES):
+        messages = build_messages_from_prompt(prompt_config, original_title, original)
+        etc_lower = prompt_config[-1].lower()
+        if "3000자" in etc_lower:
+            max_tokens = 3000
+        elif "2500자" in etc_lower:
+            max_tokens = 2500
+        elif "2000자" in etc_lower:
+            max_tokens = 2000
+        else:
+            max_tokens = 3000
+        resp = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            temperature=0.8,
+            max_tokens=max_tokens
+        )
+        regen = resp.choices[0].message.content.strip()
+        regen = clean_content(regen)
+        score = max(calculate_similarity(regen, t) for t in existing_texts)
+        if score < SIMILARITY_THRESHOLD:
+            return regen, score, i + 1
+    return regen, score, MAX_RETRIES
+
+def regenerate_title(content: str) -> str:
+    system = "너는 마케팅 콘텐츠 전문가야. 아래 내용을 보고 클릭을 유도하는 짧은 제목을 작성해줘."
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": content[:1000]}
+        ],
+        temperature=0.7,
+        max_tokens=800
     )
-    return response.choices[0].message.content.strip()
+    title = resp.choices[0].message.content.strip()
+    return re.sub(r'^.*?:\s*', '', title)
 
-def process_excel_to_sheet():
-    processed_sheet = init_worksheet(GSHEET_ID, "ProcessedExcel", ["file_id"])
-    processed_ids = load_processed_excel_ids(processed_sheet)
-    files = list_excel_files_in_folder(GOOGLE_DRIVE_FOLDER_ID)
-    target_sheet = init_worksheet(GSHEET_ID, "xls", ["작성날짜", "제목", "국문"])
-    prompt_sheet = init_worksheet(GSHEET_ID, "prompt")
+def extract_tags(text: str) -> List[str]:
+    prompt = f"다음 글에서 실무 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0,
+        max_tokens=50
+    )
+    content = resp.choices[0].message.content.strip()
+    tags = re.findall(r'#(\w+)', content)
+    return tags[:5]
 
-    prompt = get_prompt_from_sheet(prompt_sheet)
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def translate_text(text: str, lang: str) -> str:
+    langs = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
+    target = langs.get(lang, lang)
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": f"다음을 {target}로 번역해줘."},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.5,
+        max_tokens=2000
+    )
+    return resp.choices[0].message.content.strip()
 
-    for file in files:
-        if file["id"] in processed_ids:
+def find_matching_image(tags: List[str], image_ws) -> str:
+    data = image_ws.get_all_values()[1:]
+    for row in data:
+        for tag in tags:
+            if tag in row[0]:
+                return row[1]
+    return ""
+
+def now_str() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def extract_valid_prompt(prompt_ws) -> List[List[str]]:
+    rows = prompt_ws.get_all_values()[1:]
+    return [r[4:10] for r in rows if r[1].strip() == '재생산' and r[3].strip() == 'Y']
+
+def pick_rows(src_ws, count=SELECT_COUNT) -> List[List[str]]:
+    rows = src_ws.get_all_values()[1:]
+    return random.sample(rows, min(count, len(rows))) if rows else []
+
+def estimate_cost(tokens: int, model: str = "gpt-3.5-turbo") -> float:
+    rate = 0.0015 if model == "gpt-3.5-turbo" else 0.03
+    return round(tokens/1000 * rate, 4)
+
+def process_regeneration():
+    logging.basicConfig(level=logging.INFO)
+    logging.info("📌 process_regeneration() 시작")
+
+    src_ws = init_worksheet(SOURCE_DB_ID, "xls")
+    prompt_ws = init_worksheet(SOURCE_DB_ID, "prompt")
+    image_ws = init_worksheet(SOURCE_DB_ID, "image")
+    info_ws = init_worksheet(TARGET_DB_ID, "information",
+        ["작성일시", "제목", "내용", "태그", "영문", "중문", "일문", "표절률", "이미지url"])
+
+    selected = pick_rows(src_ws)
+    logging.info(f"🎯 선택된 행 수: {len(selected)}")
+    if not selected:
+        logging.warning("⚠️ 본문 시트에서 선택할 수 있는 행이 없습니다.")
+        return 0
+
+    prompts = extract_valid_prompt(prompt_ws)
+    logging.info(f"🎯 프롬프트 수: {len(prompts)}")
+    if not prompts:
+        logging.warning("⚠️ 사용 가능한 프롬프트가 없습니다.")
+        return 0
+
+    config = random.choice(prompts)
+    all_texts = [r[2] for r in src_ws.get_all_values()[1:] if len(r) > 2]
+    total_tokens = 0
+
+    for row in selected:
+        original_title = row[1] if len(row) > 1 else ""
+        original = row[2] if len(row) > 2 else ""
+        if not original:
+            logging.warning(f"⚠️ 본문이 비어 있음: {row}")
             continue
-        df = pd.read_excel(download_excel_file(file["id"]))
-        for _, row in df.iterrows():
-            title = str(row.get("제목", "")).strip()
-            body = str(row.get("본문", "")).strip()
-            if title and body:
-                kor = generate_post(title, body, prompt)
-                target_sheet.append_row([now_str, title, kor])
-        save_processed_excel_id(processed_sheet, file["id"])
+        content, score, tries = regenerate_unique_post(original_title, original, all_texts, config)
+        total_tokens += tries * 3000
+        new_title = regenerate_title(content)
+        tags = extract_tags(content)
+        en = translate_text(content, "English")
+        zh = translate_text(content, "Chinese")
+        ja = translate_text(content, "Japanese")
+        img = find_matching_image(tags, image_ws)
+        try:
+            info_ws.append_row([
+                now_str(), new_title, content,
+                ", ".join(tags), en, zh, ja,
+                f"{score:.2f}", img
+            ])
+            logging.info(f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
+        except Exception as e:
+            logging.error(f"❌ 시트 쓰기 실패: {e}")
+
+    logging.info(f"💰 예상 비용: ${estimate_cost(total_tokens)}")
+    return len(selected)
 
 if __name__ == "__main__":
-    process_excel_to_sheet()
+    process_regeneration()
