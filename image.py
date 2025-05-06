@@ -1,4 +1,7 @@
 import os
+
+print("📂 Current working directory:", os.getcwd())
+
 import json
 import datetime
 import gspread

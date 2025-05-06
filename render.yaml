@@ -24,12 +24,8 @@ services:
     name: run-image
     schedule: "5 * * * *"
     env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python image.py"
-
     buildCommand: "echo '📦 Installing...' && pip install -r /opt/render/project/src/requirements.txt && echo '✅ pip install done'"
-
-
+    startCommand: "python image.py"
 
   - type: cron
     name: run-publi-sup
@@ -44,5 +40,3 @@ services:
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python publi_xls.py"
-
-    
