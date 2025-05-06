@@ -7,13 +7,14 @@ import openai
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
 GSHEET_ID = os.getenv("GSHEET_ID")
 GPT_MODEL = "gpt-3.5-turbo"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
 
-# ✅ service account key에서 \n 복원
-GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON").replace('\\n', '\n')
-creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
+# ✅ 줄바꿈 복원 및 JSON 파싱
+creds_dict = json.loads(GSHEET_CREDENTIALS_JSON.replace('\\n', '\n'))
 
 # ✅ OpenAI API Key 설정
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 def extract_main_text(url):
     try:
