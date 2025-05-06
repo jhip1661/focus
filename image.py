@@ -1,3 +1,5 @@
+import os
+import json
 import datetime
 import gspread
 from google.oauth2.service_account import Credentials as GCredentials
@@ -7,17 +9,18 @@ from googleapiclient.discovery import build
 GSHEET_ID = "1lH1pZLYMEPab7zthSDYPpzumtIJOgzx-Iu1TBcqkFCQ"
 FOLDER_ID = '1bBeSUZJV7r2UyxvDiVZWMtp4FjwHo-l9'
 SHEET_NAME = 'image'
-SERVICE_ACCOUNT_FILE = 'focus-2025-458906-5c2350811745.json'
+
+# 🔐 인증 (환경변수 사용)
+creds_dict = json.loads(os.getenv("GSHEET_CREDENTIALS_JSON"))
+creds = GCredentials.from_service_account_info(
+    creds_dict,
+    scopes=[
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+    ]
+)
 
 def update_images():
-    # 🔐 인증
-    creds = GCredentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE,
-        scopes=[
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets"
-        ]
-    )
     drive_service = build('drive', 'v3', credentials=creds)
     gc = gspread.authorize(creds)
     sheet = gc.open_by_key(GSHEET_ID).worksheet(SHEET_NAME)
@@ -36,19 +39,19 @@ def update_images():
 
     # 🧠 기존 시트의 파일명 목록 추출
     existing_rows = sheet.get_all_values()
-    existing_names = [row[1] for row in existing_rows[1:]]  # 헤더 제외
+    existing_names = [row[1] for row in existing_rows[1:]]
 
     # ➕ 새로운 항목만 추가
     added_count = 0
     for file in items:
         name = file['name']
         if name in existing_names:
-            continue  # 이미 존재하는 파일은 건너뜀
+            continue
 
         created_time = file['createdTime'][:10]
         file_url = f"https://drive.google.com/uc?export=download&id={file['id']}"
-        usage = "광고이미지"   # D열: 사용처
-        tags = ""              # E열: 태그 (필요시 향후 자동 생성 가능)
+        usage = "광고이미지"
+        tags = ""
 
         sheet.append_row([created_time, name, file_url, usage, tags])
         added_count += 1
