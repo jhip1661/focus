@@ -5,17 +5,23 @@ import openai
 
 logging.basicConfig(level=logging.INFO)
 
-# ✅ 환경변수 불러오기 및 인증 처리
+# ✅ 환경변수 불러오기
 raw_json = os.getenv("GSHEET_CREDENTIALS_JSON")
 if not raw_json:
     raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 존재하지 않습니다.")
 
 try:
+    # 🎯 핵심: \n 복원 (주의: 꼭 \\n → \n 변환만 적용해야 함)
     fixed_json = raw_json.replace('\\n', '\n')
+
+    # ✅ JSON 파싱
     creds_dict = json.loads(fixed_json)
+
+    # ✅ 인증 객체 생성
     creds = GCredentials.from_service_account_info(creds_dict)
     gclient = gspread.authorize(creds)
-    logging.info("✅ 인증 및 Google Sheets 클라이언트 설정 완료")
+
+    logging.info("✅ Google Sheets 인증 완료")
 except Exception as e:
     logging.error(f"❌ 인증 처리 중 오류: {e}")
     raise
@@ -140,6 +146,8 @@ def fetch_and_process_raindrop():
         append_to_fixed_sheet(row)
         added += 1
     return added
+
+print(repr(raw_json[:200]))  # 시작 200글자만 출력
 
 if __name__ == "__main__":
     fetch_and_process_raindrop()
