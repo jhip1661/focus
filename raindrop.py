@@ -60,7 +60,7 @@ def get_raindrop_prompt_by_tag(tags):
             else:
                 global_prompt = prompt_data
 
-                return domestic_prompt if any(domestic_tag in tag for tag in tags) else global_prompt or domestic_prompt
+    return domestic_prompt if any(domestic_tag in tag for tag in tags) else global_prompt or domestic_prompt
 
 def generate_blog_style_summary(title, url, text, tags):
     prompt_data = get_raindrop_prompt_by_tag(tags)
