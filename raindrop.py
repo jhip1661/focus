@@ -2,6 +2,24 @@ import os, json, datetime, time, requests, logging, gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
 import openai
+logging.basicConfig(level=logging.INFO)
+
+# 인증 처리 및 클라이언트 생성
+raw_json = os.getenv("GSHEET_CREDENTIALS_JSON")
+if not raw_json:
+    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 존재하지 않습니다.")
+try:
+    fixed_json = raw_json.encode('utf-8').decode('unicode_escape')
+    creds_dict = json.loads(fixed_json)
+    creds = GCredentials.from_service_account_info(creds_dict)
+    gclient = gspread.authorize(creds)
+    logging.info("✅ 인증 및 Google Sheets 클라이언트 설정 완료")
+except Exception as e:
+    logging.error(f"❌ 인증 처리 중 오류: {e}")
+    raise
+
+# 🔑 인증 객체로 gspread 초기화
+gclient = gspread.authorize(creds)
 
 # 📌 환경변수 불러오기
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
@@ -39,6 +57,10 @@ except Exception as e:
     logging.error(f"❌ 예상치 못한 오류 발생: {e}")
     raise
 
+data = res.json()
+if 'items' not in data:
+    logging.error("❌ Raindrop 응답 형식 오류")
+    return 0
 
 def extract_main_text(url):
     try:
@@ -52,7 +74,6 @@ def extract_main_text(url):
         return None
 
 def get_raindrop_prompt_by_tag(tags):
-    gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
     rows = sheet.get_all_values()
 
@@ -75,7 +96,7 @@ def get_raindrop_prompt_by_tag(tags):
             else:
                 global_prompt = prompt_data
 
-    return domestic_prompt if domestic_tag in tags else global_prompt or domestic_prompt
+    return domestic_prompt if any(domestic_tag in tag for tag in tags) else global_prompt or domestic_prompt
 
 def generate_blog_style_summary(title, url, text, tags):
     prompt_data = get_raindrop_prompt_by_tag(tags)
@@ -120,7 +141,6 @@ def generate_blog_style_summary(title, url, text, tags):
     return "[GPT 생성 실패]"
 
 def append_to_fixed_sheet(row):
-    gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
     existing_titles = set(sheet.col_values(2))
     if row[1] not in existing_titles:
