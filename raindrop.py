@@ -2,14 +2,16 @@ import os, json, datetime, time, requests, logging, gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
 import openai
+
 logging.basicConfig(level=logging.INFO)
 
-# 인증 처리 및 클라이언트 생성
+# ✅ 환경변수 불러오기 및 인증 처리
 raw_json = os.getenv("GSHEET_CREDENTIALS_JSON")
 if not raw_json:
     raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 존재하지 않습니다.")
+
 try:
-    fixed_json = raw_json.encode('utf-8').decode('unicode_escape')
+    fixed_json = raw_json.replace('\\n', '\n')
     creds_dict = json.loads(fixed_json)
     creds = GCredentials.from_service_account_info(creds_dict)
     gclient = gspread.authorize(creds)
@@ -18,49 +20,12 @@ except Exception as e:
     logging.error(f"❌ 인증 처리 중 오류: {e}")
     raise
 
-# 🔑 인증 객체로 gspread 초기화
-gclient = gspread.authorize(creds)
-
-# 📌 환경변수 불러오기
+# 📌 기타 환경변수
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
 GSHEET_ID = os.getenv("GSHEET_ID")
 GPT_MODEL = "gpt-3.5-turbo"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-# ✅ OpenAI API Key 설정
 openai.api_key = OPENAI_API_KEY
-
-# 로그 설정
-logging.basicConfig(level=logging.INFO)
-
-# ✅ Google Sheets 인증 객체 생성 (디버깅 포함)
-try:
-    logging.info("📦 환경변수 불러오기 시작")
-    raw_json = os.environ["GSHEET_CREDENTIALS_JSON"]
-    logging.info(f"✅ 환경변수 길이: {len(raw_json)}")
-    logging.info(f"🔎 환경변수 시작 부분: {raw_json[:100]}...")
-
-    logging.info("🔧 줄바꿈 복원 중 (\\n → \n)")
-    fixed_json = raw_json.replace('\\n', '\n')
-
-    logging.info("🧪 JSON 파싱 시작")
-    creds_dict = json.loads(fixed_json)
-    logging.info("✅ JSON 파싱 성공")
-
-except json.JSONDecodeError as je:
-    logging.error(f"❌ JSON 디코드 오류: {je}")
-    raise
-except KeyError as ke:
-    logging.error(f"❌ 환경변수 키 누락: {ke}")
-    raise
-except Exception as e:
-    logging.error(f"❌ 예상치 못한 오류 발생: {e}")
-    raise
-
-data = res.json()
-if 'items' not in data:
-    logging.error("❌ Raindrop 응답 형식 오류")
-    return 0
 
 def extract_main_text(url):
     try:
@@ -78,8 +43,7 @@ def get_raindrop_prompt_by_tag(tags):
     rows = sheet.get_all_values()
 
     domestic_tag = "국내지원사업"
-    domestic_prompt = None
-    global_prompt = None
+    domestic_prompt, global_prompt = None, None
 
     for row in rows[1:]:
         if len(row) >= 9 and row[1].strip().lower() == "raindrop" and row[3].strip().upper() == "Y":
@@ -149,10 +113,16 @@ def append_to_fixed_sheet(row):
 def fetch_and_process_raindrop():
     headers = {"Authorization": f"Bearer {RAINDROP_TOKEN}"}
     res = requests.get("https://api.raindrop.io/rest/v1/raindrops/0", headers=headers)
+
     if res.status_code != 200:
         raise Exception(f"Raindrop API 호출 실패: {res.text}")
 
-    items = res.json().get("items", [])
+    data = res.json()
+    if 'items' not in data:
+        logging.error("❌ Raindrop 응답 형식 오류")
+        return 0
+
+    items = data.get("items", [])
     added = 0
     for item in items:
         title = item.get("title")
