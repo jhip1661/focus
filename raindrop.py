@@ -1,38 +1,52 @@
-import os, json, datetime, time, requests, logging, gspread
+import os
+import json
+import datetime
+import time
+import logging
+import requests
+import gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
 import openai
 
-logging.basicConfig(level=logging.INFO)
+# ── 로깅 설정 ───────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# ✅ 환경변수 불러오기
-raw_json = os.getenv("GSHEET_CREDENTIALS_JSON")
-if not raw_json:
-    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 존재하지 않습니다.")
+# ── 환경변수 로드 ─────────────────────────────────────────────────────────────────
+RAW_JSON            = os.getenv("GSHEET_CREDENTIALS_JSON")
+RAINDROP_TOKEN      = os.getenv("RAINDROP_TOKEN")
+GSHEET_ID           = os.getenv("GSHEET_ID")
+OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY")
+GPT_MODEL           = "gpt-3.5-turbo"
 
-try:
-    # 🎯 핵심: \n 복원 (주의: 꼭 \\n → \n 변환만 적용해야 함)
-    fixed_json = raw_json.replace('\\n', '\n')
+# ── 필수 환경변수 체크 ─────────────────────────────────────────────────────────────
+if not RAW_JSON:
+    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 누락되었습니다.")
+if not RAINDROP_TOKEN:
+    raise ValueError("❌ 환경변수 'RAINDROP_TOKEN'이 누락되었습니다.")
+if not GSHEET_ID:
+    raise ValueError("❌ 환경변수 'GSHEET_ID'이 누락되었습니다.")
+if not OPENAI_API_KEY:
+    raise ValueError("❌ 환경변수 'OPENAI_API_KEY'이 누락되었습니다.")
 
-    # ✅ JSON 파싱
-    creds_dict = json.loads(fixed_json)
-
-    # ✅ 인증 객체 생성
-    creds = GCredentials.from_service_account_info(creds_dict)
-    gclient = gspread.authorize(creds)
-
-    logging.info("✅ Google Sheets 인증 완료")
-except Exception as e:
-    logging.error(f"❌ 인증 처리 중 오류: {e}")
-    raise
-
-# 📌 기타 환경변수
-RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
-GSHEET_ID = os.getenv("GSHEET_ID")
-GPT_MODEL = "gpt-3.5-turbo"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
+# ── Google Sheets 인증 ────────────────────────────────────────────────────────────
+try:
+    # 1) 우선 있는 그대로 JSON 파싱 시도
+    creds_info = json.loads(RAW_JSON)
+    logging.info("✅ JSON 파싱(원본) 성공")
+except json.JSONDecodeError:
+    # 2) 실패하면 \\n → \n 복원 후 재시도
+    fixed = RAW_JSON.replace('\\n', '\n')
+    creds_info = json.loads(fixed)
+    logging.info("✅ JSON 파싱(복원) 성공")
+
+creds    = GCredentials.from_service_account_info(creds_info)
+gclient  = gspread.authorize(creds)
+logging.info("✅ Google Sheets 인증 완료")
+
+# ── 본문 추출 함수 ─────────────────────────────────────────────────────────────────
 def extract_main_text(url):
     try:
         html = requests.get(url, timeout=10).text
@@ -44,30 +58,35 @@ def extract_main_text(url):
         logging.warning(f"[본문 추출 실패] {e}")
         return None
 
+# ── 프롬프트 선택 함수 ─────────────────────────────────────────────────────────────
 def get_raindrop_prompt_by_tag(tags):
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
-    rows = sheet.get_all_values()
+    rows  = sheet.get_all_values()
 
-    domestic_tag = "국내지원사업"
-    domestic_prompt, global_prompt = None, None
+    domestic_tag     = "국내지원사업"
+    domestic_prompt  = None
+    global_prompt    = None
 
     for row in rows[1:]:
         if len(row) >= 9 and row[1].strip().lower() == "raindrop" and row[3].strip().upper() == "Y":
             prompt_data = {
-                "role": row[4],
-                "conditions": row[5],
-                "structure": row[6],
-                "must_include": row[7],
-                "conclusion": row[8],
-                "extra": row[9] if len(row) > 9 else ""
+                "role":        row[4],
+                "conditions":  row[5],
+                "structure":   row[6],
+                "must_include":row[7],
+                "conclusion":  row[8],
+                "extra":       row[9] if len(row) > 9 else ""
             }
             if row[2].strip() == domestic_tag:
                 domestic_prompt = prompt_data
             else:
-                global_prompt = prompt_data
+                global_prompt   = prompt_data
 
-    return domestic_prompt if any(domestic_tag in tag for tag in tags) else global_prompt or domestic_prompt
+    if any(domestic_tag in t for t in tags):
+        return domestic_prompt or global_prompt
+    return global_prompt or domestic_prompt
 
+# ── GPT 요약 생성 ─────────────────────────────────────────────────────────────────
 def generate_blog_style_summary(title, url, text, tags):
     prompt_data = get_raindrop_prompt_by_tag(tags)
     if not prompt_data:
@@ -95,30 +114,31 @@ def generate_blog_style_summary(title, url, text, tags):
 스크랩한 본문:
 {text}
 """
-
     for _ in range(3):
         try:
-            response = openai.ChatCompletion.create(
+            resp = openai.ChatCompletion.create(
                 model=GPT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2500,
                 temperature=0.7
             )
-            return response.choices[0].message.content.strip()
+            return resp.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"GPT 생성 실패, 재시도 중: {e}")
             time.sleep(3)
     return "[GPT 생성 실패]"
 
+# ── Google Sheets 행 추가 ─────────────────────────────────────────────────────────
 def append_to_fixed_sheet(row):
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
-    existing_titles = set(sheet.col_values(2))
-    if row[1] not in existing_titles:
+    existing = set(sheet.col_values(2))
+    if row[1] not in existing:
         sheet.append_row(row)
 
+# ── Raindrop API 호출 및 처리 ────────────────────────────────────────────────────
 def fetch_and_process_raindrop():
     headers = {"Authorization": f"Bearer {RAINDROP_TOKEN}"}
-    res = requests.get("https://api.raindrop.io/rest/v1/raindrops/0", headers=headers)
+    res     = requests.get("https://api.raindrop.io/rest/v1/raindrops/0", headers=headers)
 
     if res.status_code != 200:
         raise Exception(f"Raindrop API 호출 실패: {res.text}")
@@ -128,26 +148,28 @@ def fetch_and_process_raindrop():
         logging.error("❌ Raindrop 응답 형식 오류")
         return 0
 
-    items = data.get("items", [])
     added = 0
-    for item in items:
+    for item in data['items']:
         title = item.get("title")
-        link = item.get("link")
-        tags = item.get("tags", [])
-        if not title or not link or not tags:
+        link  = item.get("link")
+        tags  = item.get("tags", [])
+        if not (title and link and tags):
             continue
+
         content = extract_main_text(link)
         if not content:
             continue
+
         summary = generate_blog_style_summary(title, link, content, tags)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tag_string = ", ".join(tags)
-        row = [now, title, summary, link, tag_string]
+        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tag_str = ", ".join(tags)
+        row     = [now, title, summary, link, tag_str]
         append_to_fixed_sheet(row)
         added += 1
+
+    logging.info(f"✅ 처리 완료: {added}개 항목 추가")
     return added
 
-print(repr(raw_json[:200]))  # 시작 200글자만 출력
-
+# ── 스크립트 실행 ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     fetch_and_process_raindrop()
