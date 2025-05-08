@@ -1,7 +1,47 @@
 services:
   - type: cron
-    name: run-focus
-    schedule: "0 * * * *"  # 매시간 정각마다 실행 (UTC 기준)
+    name: run-raindrop
+    schedule: "0 */3 * * *"  # 매 3시간마다 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python focus.py"
+    startCommand: "python raindrop.py"
+
+  - type: cron
+    name: run-publi-ad
+    schedule: "5 */3 * * *"  # 매 3시간마다 5분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python publi_ad.py"
+
+  - type: cron
+    name: run-xls
+    schedule: "10 */3 * * *"  # 매 3시간마다 10분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python xls.py"
+
+  - type: cron
+    name: run-image
+    schedule: "15 */3 * * *"  # 매 3시간마다 15분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python image.py"
+
+  - type: cron
+    name: run-publi-sup
+    schedule: "20 */3 * * *"  # 매 3시간마다 20분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python publi_sup.py"
+
+  - type: cron
+    name: run-publi-xls
+    schedule: "25 */3 * * *"  # 매 3시간마다 25분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: |
+      if [ -f xls.py ]; then
+        python publi_xls.py
+      else
+        echo "📎 xls.py 없음: publi_xls.py 생략"
+      fi

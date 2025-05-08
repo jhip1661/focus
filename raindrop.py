@@ -3,25 +3,19 @@ from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
 import openai
 
-
-
-# 📌 환경변수 불러오기 (Render 기준)
+# 📌 환경변수 불러오기
 RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
 GSHEET_ID = os.getenv("GSHEET_ID")
 GPT_MODEL = "gpt-3.5-turbo"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-
-# ✅ 줄바꿈 복원 및 JSON 파싱
-creds_dict = json.loads(GSHEET_CREDENTIALS_JSON.replace('\\n', '\n'))
 
 # ✅ OpenAI API Key 설정
 openai.api_key = OPENAI_API_KEY
 
-
 # 로그 설정
 logging.basicConfig(level=logging.INFO)
 
+# ✅ Google Sheets 인증 객체 생성 (디버깅 포함)
 try:
     logging.info("📦 환경변수 불러오기 시작")
     raw_json = os.environ["GSHEET_CREDENTIALS_JSON"]
@@ -35,19 +29,15 @@ try:
     creds_dict = json.loads(fixed_json)
     logging.info("✅ JSON 파싱 성공")
 
-    logging.info("🔐 Google Credentials 객체 생성 시작")
-    creds = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    logging.info("🎉 인증 객체 생성 완료!")
-
 except json.JSONDecodeError as je:
     logging.error(f"❌ JSON 디코드 오류: {je}")
+    raise
 except KeyError as ke:
     logging.error(f"❌ 환경변수 키 누락: {ke}")
+    raise
 except Exception as e:
     logging.error(f"❌ 예상치 못한 오류 발생: {e}")
+    raise
 
 
 def extract_main_text(url):
@@ -62,7 +52,6 @@ def extract_main_text(url):
         return None
 
 def get_raindrop_prompt_by_tag(tags):
-    creds = GCredentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
     rows = sheet.get_all_values()
@@ -131,7 +120,6 @@ def generate_blog_style_summary(title, url, text, tags):
     return "[GPT 생성 실패]"
 
 def append_to_fixed_sheet(row):
-    creds = GCredentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     gclient = gspread.authorize(creds)
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
     existing_titles = set(sheet.col_values(2))

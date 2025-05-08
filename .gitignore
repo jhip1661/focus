@@ -1,4 +1,5 @@
 # .env, .json 민감정보는 추적 금지
+정보.txt
 .env
 *.json
 
@@ -6,3 +7,4 @@
 __pycache__/
 *.pyc
 *.pyo
+
