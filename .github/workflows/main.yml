@@ -1,0 +1,51 @@
+name: Run All Python Scripts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run all Python scripts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GSHEET_CREDENTIALS_JSON: ${{ secrets.GSHEET_CREDENTIALS_JSON }}
+          SOURCE_DB_ID: ${{ secrets.SOURCE_DB_ID }}
+          TARGET_DB_ID: ${{ secrets.TARGET_DB_ID }}
+          RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
+        run: |
+          set -e  # fail immediately if any command fails
+          
+          echo "▶ Running xls.py"
+          python xls.py || echo "❌ xls.py failed"
+
+          echo "▶ Running raindrop.py"
+          python raindrop.py || echo "❌ raindrop.py failed"
+
+          echo "▶ Running publi_sup.py"
+          python publi_sup.py || echo "❌ publi_sup.py failed"
+
+          echo "▶ Running publi_ad.py"
+          python publi_ad.py || echo "❌ publi_ad.py failed"
+
+          echo "▶ Running image.py"
+          python image.py || echo "❌ image.py failed"
+
+          echo "▶ Running publi_xls.py"
+          python publi_xls.py || echo "❌ publi_xls.py failed"
