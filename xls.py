@@ -9,7 +9,7 @@ import difflib
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from openai import OpenAI
+import openai
 
 # 🔐 환경 변수에서 JSON 문자열 읽고 줄바꿈 처리
 CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
