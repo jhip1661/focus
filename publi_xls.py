@@ -9,7 +9,7 @@ import difflib
 
 import gspread
 from google.oauth2.service_account import Credentials as GCredentials
-from openai import OpenAI  # 올바른 임포트
+import openai   # ✅ 변경: OpenAI 클래스 대신 모듈 전체를 import
 
 # 🔐 서비스 계정 JSON 로드 & 검증
 CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "")
@@ -20,10 +20,11 @@ try:
 except json.JSONDecodeError as e:
     raise ValueError(f"❌ SERVICE_ACCOUNT_JSON 파싱 실패: {e}")
 if ("private_key" not in creds_info or
-        not creds_info["private_key"].startswith("-----BEGIN PRIVATE KEY-----")
-    ):
-    raise ValueError("❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON을 정확히 복사했는지, "
-                     "서비스 계정 이메일이 시트에 공유되어 있는지 확인하세요.")
+        not creds_info["private_key"].startswith("-----BEGIN PRIVATE KEY-----")):
+    raise ValueError(
+        "❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON을 정확히 복사했는지, "
+        "서비스 계정 이메일이 시트에 공유되어 있는지 확인하세요."
+    )
 
 # ▶ Google Sheets/Drive 인증 객체 생성
 GS_SCOPES = [
@@ -36,11 +37,12 @@ try:
 except Exception as e:
     raise RuntimeError(f"❌ 인증 정보 로드 실패: {e}")
 
-# 🔑 OpenAI 클라이언트 설정 (v1.x)
+# 🔑 OpenAI 클라이언트 설정
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 누락되었습니다.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
+client = openai  # alias
 
 # 🚩 상수
 SOURCE_DB_ID = os.getenv("SOURCE_DB_ID")
@@ -56,9 +58,9 @@ def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     try:
         ws = gs_client.open_by_key(sheet_id).worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        ws = gs_client.open_by_key(sheet_id).add_worksheet(title=sheet_name,
-                                                           rows="1000",
-                                                           cols="20")
+        ws = gs_client.open_by_key(sheet_id).add_worksheet(
+            title=sheet_name, rows="1000", cols="20"
+        )
     if header:
         current = ws.get_all_values()
         if not current or all(cell == "" for cell in current[0]):
@@ -75,8 +77,9 @@ def clean_content(text: str) -> str:
     return re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)[:\-]?\s*', "", text).strip()
 
 
-def build_messages_from_prompt(prompt_cfg: List[str], title: str,
-                               content: str) -> List[dict]:
+def build_messages_from_prompt(
+    prompt_cfg: List[str], title: str, content: str
+) -> List[dict]:
     purpose, tone, para, emphasis, fmt, etc = prompt_cfg
     system = f"""{purpose}
 
@@ -93,18 +96,18 @@ def build_messages_from_prompt(prompt_cfg: List[str], title: str,
 
 제목: {title}
 내용: {content}"""
-    return [{
-        "role": "system",
-        "content": system.strip()
-    }, {
-        "role": "user",
-        "content": user.strip()
-    }]
+    return [
+        {"role": "system", "content": system.strip()},
+        {"role": "user", "content": user.strip()},
+    ]
 
 
-def regenerate_unique_post(original_title: str, original: str,
-                           existing_texts: List[str],
-                           prompt_cfg: List[str]) -> Tuple[str, float, int]:
+def regenerate_unique_post(
+    original_title: str,
+    original: str,
+    existing_texts: List[str],
+    prompt_cfg: List[str],
+) -> Tuple[str, float, int]:
     regen, score = original, 1.0
     for attempt in range(1, MAX_RETRIES + 1):
         msgs = build_messages_from_prompt(prompt_cfg, original_title, original)
@@ -118,10 +121,12 @@ def regenerate_unique_post(original_title: str, original: str,
         else:
             max_tokens = 3000
 
-        resp = client.chat.completions.create(model="gpt-3.5-turbo",
-                                              messages=msgs,
-                                              temperature=0.8,
-                                              max_tokens=max_tokens)
+        resp = client.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=msgs,
+            temperature=0.8,
+            max_tokens=max_tokens,
+        )
         candidate = clean_content(resp.choices[0].message.content.strip())
         sim = max(calculate_similarity(candidate, ex) for ex in existing_texts)
         if sim < SIMILARITY_THRESHOLD:
@@ -133,36 +138,31 @@ def regenerate_unique_post(original_title: str, original: str,
 
 def regenerate_title(content: str) -> str:
     system = "너는 마케팅 콘텐츠 전문가야. 아래 내용을 보고 클릭을 유도하는 짧은 제목을 작성해줘."
-    resp = client.chat.completions.create(model="gpt-3.5-turbo",
-                                          messages=[{
-                                              "role": "system",
-                                              "content": system
-                                          }, {
-                                              "role": "user",
-                                              "content": content[:1000]
-                                          }],
-                                          temperature=0.7,
-                                          max_tokens=800)
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": content[:1000]},
+        ],
+        temperature=0.7,
+        max_tokens=800,
+    )
     title = resp.choices[0].message.content.strip()
-    return re.sub(r'^.*?:\s*', '', title)
+    return re.sub(r"^.*?:\s*", "", title)
 
 
 def extract_tags(text: str) -> List[str]:
     prompt = f"다음 글에서 실무 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
-    resp = client.chat.completions.create(model="gpt-3.5-turbo",
-                                          messages=[{
-                                              "role":
-                                              "system",
-                                              "content":
-                                              "당신은 태그 추출 전문가입니다."
-                                          }, {
-                                              "role": "user",
-                                              "content": prompt
-                                          }],
-                                          temperature=0,
-                                          max_tokens=50)
-    tags = re.findall(r'#(\w+)', resp.choices[0].message.content.strip())
-    return tags[:5]
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        max_tokens=50,
+    )
+    return re.findall(r"#(\w+)", resp.choices[0].message.content.strip())[:5]
 
 
 def translate_text(text: str, lang: str) -> str:
@@ -172,18 +172,15 @@ def translate_text(text: str, lang: str) -> str:
         "Japanese": "Japanese"
     }
     target = langs.get(lang, lang)
-    resp = client.chat.completions.create(model="gpt-3.5-turbo",
-                                          messages=[{
-                                              "role":
-                                              "system",
-                                              "content":
-                                              f"다음을 {target}로 번역해줘."
-                                          }, {
-                                              "role": "user",
-                                              "content": text
-                                          }],
-                                          temperature=0.5,
-                                          max_tokens=2000)
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": f"다음을 {target}로 번역해줘."},
+            {"role": "user", "content": text},
+        ],
+        temperature=0.5,
+        max_tokens=2000,
+    )
     return resp.choices[0].message.content.strip()
 
 
@@ -203,7 +200,9 @@ def now_str() -> str:
 def extract_valid_prompt(prompt_ws) -> List[List[str]]:
     rows = prompt_ws.get_all_values()[1:]
     return [
-        r[4:10] for r in rows if r[1].strip() == '재생산' and r[3].strip() == 'Y'
+        r[4:10]
+        for r in rows
+        if r[1].strip() == "재생산" and r[3].strip() == "Y"
     ]
 
 
@@ -225,8 +224,10 @@ def process_regeneration():
     prompt_ws = init_worksheet(SOURCE_DB_ID, "prompt")
     image_ws = init_worksheet(SOURCE_DB_ID, "image")
     info_ws = init_worksheet(
-        TARGET_DB_ID, "information",
-        ["작성일시", "제목", "내용", "태그", "영문", "중문", "일문", "표절률", "이미지url"])
+        TARGET_DB_ID,
+        "information",
+        ["작성일시", "제목", "내용", "태그", "영문", "중문", "일문", "표절률", "이미지url"],
+    )
 
     selected = pick_rows(src_ws)
     logging.info(f"🎯 선택된 행 수: {len(selected)}")
@@ -251,9 +252,9 @@ def process_regeneration():
             logging.warning(f"⚠️ 본문이 비어 있음: {row}")
             continue
 
-        content, score, tries = regenerate_unique_post(original_title,
-                                                       original, all_texts,
-                                                       config)
+        content, score, tries = regenerate_unique_post(
+            original_title, original, all_texts, config
+        )
         total_tokens += tries * 3000
         new_title = regenerate_title(content)
         tags = extract_tags(content)
@@ -264,11 +265,19 @@ def process_regeneration():
 
         try:
             info_ws.append_row([
-                now_str(), new_title, content, ", ".join(tags), en, zh, ja,
-                f"{score:.2f}", img
+                now_str(),
+                new_title,
+                content,
+                ", ".join(tags),
+                en,
+                zh,
+                ja,
+                f"{score:.2f}",
+                img,
             ])
             logging.info(
-                f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
+                f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회"
+            )
         except Exception as e:
             logging.error(f"❌ 시트 쓰기 실패: {e}")
 
