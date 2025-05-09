@@ -7,18 +7,18 @@ import requests
 import gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
-import openai   # ✅ 변경
+import openai   # ✅ 변경: OpenAI 클래스 대신 모듈 전체 import
 
 # ── 로깅 설정 ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ── 환경변수 로드 ─────────────────────────────────────────────────────────────────
-RAW_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
-GSHEET_ID = os.getenv("GSHEET_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = "gpt-3.5-turbo"
+RAW_JSON        = os.getenv("GSHEET_CREDENTIALS_JSON")
+RAINDROP_TOKEN  = os.getenv("RAINDROP_TOKEN")
+GSHEET_ID       = os.getenv("GSHEET_ID")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+GPT_MODEL       = "gpt-3.5-turbo"
 
 # ── 필수 환경변수 체크 ─────────────────────────────────────────────────────────────
 if not RAW_JSON:
@@ -67,7 +67,6 @@ try:
 except Exception as e:
     raise RuntimeError(f"❌ 인증 정보 로드 실패: {e}")
 
-
 # ── 본문 추출 함수 ─────────────────────────────────────────────────────────────────
 def extract_main_text(url):
     try:
@@ -79,7 +78,6 @@ def extract_main_text(url):
     except Exception as e:
         logging.warning(f"[본문 추출 실패] {e}")
         return None
-
 
 # ── 프롬프트 선택 함수 ─────────────────────────────────────────────────────────────
 def get_raindrop_prompt_by_tag(tags):
@@ -93,12 +91,12 @@ def get_raindrop_prompt_by_tag(tags):
     for row in rows[1:]:
         if len(row) >= 9 and row[1].strip().lower() == "raindrop" and row[3].strip().upper() == "Y":
             prompt_data = {
-                "role": row[4],
-                "conditions": row[5],
-                "structure": row[6],
+                "role":         row[4],
+                "conditions":   row[5],
+                "structure":    row[6],
                 "must_include": row[7],
-                "conclusion": row[8],
-                "extra": row[9] if len(row) > 9 else ""
+                "conclusion":   row[8],
+                "extra":        row[9] if len(row) > 9 else ""
             }
             if row[2].strip() == domestic_tag:
                 domestic_prompt = prompt_data
@@ -108,7 +106,6 @@ def get_raindrop_prompt_by_tag(tags):
     if any(domestic_tag in t for t in tags):
         return domestic_prompt or global_prompt
     return global_prompt or domestic_prompt
-
 
 # ── GPT 요약 생성 ─────────────────────────────────────────────────────────────────
 def generate_blog_style_summary(title, url, text, tags):
@@ -152,14 +149,12 @@ def generate_blog_style_summary(title, url, text, tags):
             time.sleep(3)
     return "[GPT 생성 실패]"
 
-
 # ── Google Sheets 행 추가 ─────────────────────────────────────────────────────────
 def append_to_fixed_sheet(row):
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
     existing = set(sheet.col_values(2))
     if row[1] not in existing:
         sheet.append_row(row)
-
 
 # ── Raindrop API 호출 및 처리 ────────────────────────────────────────────────────
 def fetch_and_process_raindrop():
@@ -177,8 +172,8 @@ def fetch_and_process_raindrop():
     added = 0
     for item in data['items']:
         title = item.get("title")
-        link = item.get("link")
-        tags = item.get("tags", [])
+        link  = item.get("link")
+        tags  = item.get("tags", [])
         if not (title and link and tags):
             continue
 
@@ -187,15 +182,14 @@ def fetch_and_process_raindrop():
             continue
 
         summary = generate_blog_style_summary(title, link, content, tags)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tag_str = ", ".join(tags)
-        row = [now, title, summary, link, tag_str]
+        row     = [now, title, summary, link, tag_str]
         append_to_fixed_sheet(row)
         added += 1
 
     logging.info(f"✅ 처리 완료: {added}개 항목 추가")
     return added
-
 
 # ── 스크립트 실행 ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
