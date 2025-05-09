@@ -7,7 +7,7 @@ import requests
 import gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials as GCredentials
-from openai import OpenAI  # v1.x 클라이언트 사용
+import openai   # ✅ 변경
 
 # ── 로깅 설정 ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO,
@@ -30,8 +30,9 @@ if not GSHEET_ID:
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'이 누락되었습니다.")
 
-# ── OpenAI 클라이언트 설정 (v1.x) ────────────────────────────────────────────────
-client = OpenAI(api_key=OPENAI_API_KEY)
+# ── OpenAI 클라이언트 설정 ─────────────────────────────────────────────────────────
+openai.api_key = OPENAI_API_KEY
+client = openai
 
 # ── 서비스 계정 JSON 파싱 & 검증 ────────────────────────────────────────────────────
 try:
@@ -47,8 +48,10 @@ except json.JSONDecodeError:
 
 if "private_key" not in creds_info or not creds_info["private_key"].startswith(
         "-----BEGIN PRIVATE KEY-----"):
-    raise ValueError("❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON을 정확히 복사했는지, "
-                     "서비스 계정 이메일이 스프레드시트에 공유되어 있는지 확인하세요.")
+    raise ValueError(
+        "❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON을 정확히 복사했는지, "
+        "서비스 계정 이메일이 스프레드시트에 공유되어 있는지 확인하세요."
+    )
 
 # ── Google Sheets 인증 ────────────────────────────────────────────────────────────
 try:
@@ -57,7 +60,8 @@ try:
         scopes=[
             "https://www.googleapis.com/auth/drive",
             "https://www.googleapis.com/auth/spreadsheets"
-        ])
+        ]
+    )
     gclient = gspread.authorize(creds)
     logging.info("✅ Google Sheets 인증 완료")
 except Exception as e:
@@ -87,8 +91,7 @@ def get_raindrop_prompt_by_tag(tags):
     global_prompt = None
 
     for row in rows[1:]:
-        if len(row) >= 9 and row[1].strip().lower(
-        ) == "raindrop" and row[3].strip().upper() == "Y":
+        if len(row) >= 9 and row[1].strip().lower() == "raindrop" and row[3].strip().upper() == "Y":
             prompt_data = {
                 "role": row[4],
                 "conditions": row[5],
@@ -137,13 +140,12 @@ def generate_blog_style_summary(title, url, text, tags):
 """
     for _ in range(3):
         try:
-            resp = client.chat.completions.create(model=GPT_MODEL,
-                                                  messages=[{
-                                                      "role": "user",
-                                                      "content": prompt
-                                                  }],
-                                                  max_tokens=2500,
-                                                  temperature=0.7)
+            resp = client.ChatCompletion.create(
+                model=GPT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2500,
+                temperature=0.7
+            )
             return resp.choices[0].message.content.strip()
         except Exception as e:
             logging.warning(f"GPT 생성 실패, 재시도 중: {e}")
@@ -162,8 +164,7 @@ def append_to_fixed_sheet(row):
 # ── Raindrop API 호출 및 처리 ────────────────────────────────────────────────────
 def fetch_and_process_raindrop():
     headers = {"Authorization": f"Bearer {RAINDROP_TOKEN}"}
-    res = requests.get("https://api.raindrop.io/rest/v1/raindrops/0",
-                       headers=headers)
+    res = requests.get("https://api.raindrop.io/rest/v1/raindrops/0", headers=headers)
 
     if res.status_code != 200:
         raise Exception(f"Raindrop API 호출 실패: {res.text}")
