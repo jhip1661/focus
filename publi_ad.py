@@ -9,7 +9,7 @@ import difflib
 
 import gspread
 from google.oauth2.service_account import Credentials as GCredentials
-from openai import OpenAI  # ✅ v1.x 클라이언트 사용
+import openai   # ✅ 변경: OpenAI 클래스 대신 모듈 전체 import
 
 # ----------------------------
 # 🔐 서비스 계정 JSON 로드 & 인증
@@ -25,8 +25,9 @@ except json.JSONDecodeError as e:
 
 if "private_key" not in creds_info or not creds_info["private_key"].startswith(
         "-----BEGIN PRIVATE KEY-----"):
-    raise ValueError("❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON 내용을 정확히 복사했는지 확인하고, "
-                     "서비스 계정 이메일이 스프레드시트에 공유되어 있는지 확인하세요.")
+    raise ValueError(
+        "❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON 내용을 정확히 복사했는지 확인하세요."
+    )
 
 try:
     gs_creds = GCredentials.from_service_account_info(
@@ -39,12 +40,13 @@ except Exception as e:
     raise RuntimeError(f"❌ 인증 정보 로드 실패: {e}")
 
 # ----------------------------
-# ✅ OpenAI 클라이언트 설정 (v1.x)
+# ✅ OpenAI 클라이언트 설정 (기존 v0.x 스타일)
 # ----------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 누락되었습니다.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
+client = openai  # alias
 
 # ----------------------------
 # 환경변수 및 상수
@@ -64,9 +66,9 @@ def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     try:
         ws = client_gs.open_by_key(sheet_id).worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        ws = client_gs.open_by_key(sheet_id).add_worksheet(title=sheet_name,
-                                                           rows="1000",
-                                                           cols="20")
+        ws = client_gs.open_by_key(sheet_id).add_worksheet(
+            title=sheet_name, rows="1000", cols="20"
+        )
     if header:
         current = ws.get_all_values()
         if not current or all(cell == "" for cell in current[0]):
@@ -86,8 +88,11 @@ def clean_content(text: str) -> str:
     return re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)[:\-]?\s*', "", text).strip()
 
 
-def build_messages_from_prompt(prompt_config: List[str], title: str,
-                               content: str) -> List[dict]:
+def build_messages_from_prompt(
+    prompt_config: List[str],
+    title: str,
+    content: str
+) -> List[dict]:
     purpose, tone, para, emphasis, format_, etc = prompt_config
     system_msg = f"""{purpose}
 
@@ -105,14 +110,8 @@ def build_messages_from_prompt(prompt_config: List[str], title: str,
 제목: {title}
 내용: {content}"""
     return [
-        {
-            "role": "system",
-            "content": system_msg.strip()
-        },
-        {
-            "role": "user",
-            "content": user_msg.strip()
-        },
+        {"role": "system", "content": system_msg.strip()},
+        {"role": "user", "content": user_msg.strip()},
     ]
 
 
@@ -123,12 +122,16 @@ def regenerate_unique_post(
     prompt_config: List[str],
 ) -> Tuple[str, float, int]:
     for i in range(MAX_RETRIES):
-        messages = build_messages_from_prompt(prompt_config, original_title,
-                                              original)
+        messages = build_messages_from_prompt(
+            prompt_config, original_title, original
+        )
         etc_lower = prompt_config[-1].lower()
-        max_tokens = (3000 if "3000자" in etc_lower else
-                      2500 if "2500자" in etc_lower else 2000)
-        resp = client.chat.completions.create(
+        max_tokens = (
+            3000 if "3000자" in etc_lower else
+            2500 if "2500자" in etc_lower else
+            2000
+        )
+        resp = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=messages,
             temperature=0.8,
@@ -143,19 +146,15 @@ def regenerate_unique_post(
 
 
 def regenerate_title(content: str) -> str:
-    system = ("너는 광고, 홍보, 마케팅 콘텐츠 전문가야. 아래 내용을 보고 광고, 홍보, 마케팅을 흥미롭게 해서"
-              " 소비자의 클릭을 유도하는 짧은 제목을 작성해줘.")
-    resp = client.chat.completions.create(
+    system = (
+        "너는 광고, 홍보, 마케팅 콘텐츠 전문가야. 아래 내용을 보고 광고, 홍보, 마케팅을 "
+        "흥미롭게 해서 소비자의 클릭을 유도하는 짧은 제목을 작성해줘."
+    )
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {
-                "role": "system",
-                "content": system
-            },
-            {
-                "role": "user",
-                "content": content[:1000]
-            },
+            {"role": "system", "content": system},
+            {"role": "user", "content": content[:1000]},
         ],
         temperature=0.7,
         max_tokens=800,
@@ -164,18 +163,15 @@ def regenerate_title(content: str) -> str:
 
 
 def extract_tags(text: str) -> List[str]:
-    prompt = (f"다음 글에서 광고, 홍보, 마케팅의 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}")
-    resp = client.chat.completions.create(
+    prompt = (
+        f"다음 글에서 광고, 홍보, 마케팅의 중심 명사 5개를 해시태그(#키워드) 형태로 "
+        f"추출해줘. 글: {text}"
+    )
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {
-                "role": "system",
-                "content": "당신은 태그 추출 전문가입니다."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            },
+            {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
+            {"role": "user", "content": prompt},
         ],
         temperature=0,
         max_tokens=50,
@@ -190,17 +186,11 @@ def translate_text(text: str, lang: str) -> str:
         "Japanese": "Japanese"
     }
     target = langs.get(lang, lang)
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {
-                "role": "system",
-                "content": f"다음을 {target}로 번역해줘."
-            },
-            {
-                "role": "user",
-                "content": text
-            },
+            {"role": "system", "content": f"다음을 {target}로 번역해줘."},
+            {"role": "user", "content": text},
         ],
         temperature=0.5,
         max_tokens=2000,
@@ -225,11 +215,8 @@ def process_regeneration():
     )
 
     rows = src_ws.get_all_values()[1:]
-    filtered_rows = [
-        r for r in rows if len(r) > 1 and r[1].strip().upper() == "Y"
-    ]
-    selected = random.sample(filtered_rows,
-                             min(SELECT_COUNT, len(filtered_rows)))
+    filtered_rows = [r for r in rows if len(r) > 1 and r[1].strip().upper() == "Y"]
+    selected = random.sample(filtered_rows, min(SELECT_COUNT, len(filtered_rows)))
     logging.info(f"🎯 대상 행 수: {len(selected)}")
 
     prompts = [
@@ -250,19 +237,22 @@ def process_regeneration():
             logging.warning(f"⚠️ 본문 비어 있음: {row}")
             continue
 
-        content, score, tries = regenerate_unique_post("", original_content,
-                                                       all_texts, config)
+        content, score, tries = regenerate_unique_post(
+            "", original_content, all_texts, config
+        )
         total_tokens += tries * 3000
         new_title = regenerate_title(content)
         tags = extract_tags(content)
         en = translate_text(content, "English")
         zh = translate_text(content, "Chinese")
         ja = translate_text(content, "Japanese")
-        img = (image_url or next(
-            (r[1] for r in image_ws.get_all_values()[1:]
-             for tag in tags if tag in r[0]),
-            "",
-        ))
+        img = (
+            image_url or next(
+                (r[1] for r in image_ws.get_all_values()[1:]
+                 for tag in tags if tag in r[0]),
+                "",
+            )
+        )
 
         try:
             info_ws.append_row([
@@ -277,7 +267,8 @@ def process_regeneration():
                 img,
             ])
             logging.info(
-                f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
+                f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회"
+            )
         except Exception as e:
             logging.error(f"❌ 시트 쓰기 실패: {e}")
 
