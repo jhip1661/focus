@@ -9,12 +9,12 @@ from typing import List, Tuple
 
 import gspread
 from google.oauth2.service_account import Credentials as GCredentials
-from openai import OpenAI  # ✅ v1.x client import
+import openai  # ✅ 변경: 모듈 전체 import
 
-# 🔐 서비스 계정 JSON 로드 & 검증
+# ── 서비스 계정 JSON 로드 & 검증 ──────────────────────────────────────────────
 CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "")
 if not CREDENTIALS_JSON:
-    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 누락되었습니다.")
+    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'가 누락되었습니다.")
 try:
     creds_info = json.loads(CREDENTIALS_JSON)
 except json.JSONDecodeError as e:
@@ -30,11 +30,11 @@ SCOPES = [
 ]
 gs_creds = GCredentials.from_service_account_info(creds_info, scopes=SCOPES)
 
-# ✅ OpenAI API 키 설정 (v1.x)
+# ✅ OpenAI API 키 설정
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 누락되었습니다.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
 # 상수 정의
 SIMILARITY_THRESHOLD = 0.6
@@ -110,8 +110,8 @@ def regenerate_unique_post(
         else:
             max_tokens = 3000
 
-        # 🔧 v1.x interface
-        resp = client.chat.completions.create(
+        # 🔧 openai module 호출로 변경
+        resp = openai.ChatCompletion.create(
             model=model,
             messages=messages,
             temperature=0.8,
@@ -128,7 +128,7 @@ def regenerate_unique_post(
 
 def regenerate_title(content: str) -> str:
     system = "너는 마케팅 콘텐츠 전문가야. 아래 내용을 보고 클릭을 유도하는 짧은 제목을 작성해줘."
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system},
@@ -142,7 +142,7 @@ def regenerate_title(content: str) -> str:
 
 def extract_tags(text: str) -> List[str]:
     prompt = f"다음 글에서 실무 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
@@ -157,7 +157,7 @@ def extract_tags(text: str) -> List[str]:
 def translate_text(text: str, lang: str) -> str:
     langs  = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
     target = langs.get(lang, lang)
-    resp = client.chat.completions.create(
+    resp = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": f"다음을 {target}로 번역해줘."},
