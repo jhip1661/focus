@@ -9,7 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from openai import OpenAI  # ✅ v1.x 클라이언트 사용
+from openai import OpenAI   # ✅ v1.x 클라이언트 import
 
 # ── 로깅 설정 ───────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -34,14 +34,14 @@ SCOPES = [
 creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
 
 # ── Google Sheets & Drive 클라이언트 생성 ─────────────────────────────────
-gc = gspread.authorize(creds)
+gc    = gspread.authorize(creds)
 drive = build("drive", "v3", credentials=creds)
 
 # ── OpenAI API 키 설정 (v1.x) ─────────────────────────────────────────────────
 openai_key = os.getenv("OPENAI_API_KEY")
 if not openai_key:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 없습니다.")
-client = OpenAI(api_key=openai_key)  # ✅ 새 클라이언트 인스턴스
+client = OpenAI(api_key=openai_key)  # ✅ 새 OpenAI 클라이언트 인스턴스
 
 # ── 필수 환경변수 및 하드코딩된 폴더 ID ─────────────────────────────────────
 SOURCE_DB_ID   = os.getenv("SOURCE_DB_ID")
@@ -106,7 +106,7 @@ def download_xlsx(file_id: str):
 def generate_text(prompt_cfg, title, content):
     system_msg = "\n\n".join(prompt_cfg)
     user_msg   = f"다음 글을 중복되지 않도록 재작성해줘:\n\n제목: {title}\n내용: {content}"
-    resp = client.chat.completions.create(  # ✅ v1.x 인터페이스
+    resp = client.chat.completions.create(  # ✅ v1.x 방식
         model=GPT_MODEL,
         messages=[
             {"role": "system", "content": system_msg},
