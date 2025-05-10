@@ -12,10 +12,25 @@ from oauth2client.service_account import ServiceAccountCredentials
 import openai  # ✅ OpenAI 모듈 전체 import
 
 # 🔐 환경 변수에서 JSON 문자열 읽고 줄바꿈 처리
-CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
-SOURCE_DB_ID     = os.getenv("SOURCE_DB_ID")
-TARGET_DB_ID     = os.getenv("TARGET_DB_ID")
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
+# Modified: handle both escaped '\n' and literal newlines in SERVICE_ACCOUNT JSON
+RAW_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "")
+try:
+    # Try loading directly (expects escaped newlines)
+    creds_info = json.loads(RAW_CREDENTIALS_JSON)
+except json.JSONDecodeError:
+    # Fallback: escape any literal newlines, tabs, or carriage returns
+    sanitized = RAW_CREDENTIALS_JSON
+    sanitized = sanitized.replace('\n', '\\n')
+    sanitized = sanitized.replace('\t', '')
+    sanitized = sanitized.replace('\r', '')
+    creds_info = json.loads(sanitized)
+# After parsing JSON, replace escaped '\n' in private_key with actual newline
+if 'private_key' in creds_info:
+    creds_info['private_key'] = creds_info['private_key'].replace('\\n', '\n')
+
+SOURCE_DB_ID   = os.getenv("SOURCE_DB_ID")
+TARGET_DB_ID   = os.getenv("TARGET_DB_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 SIMILARITY_THRESHOLD = 0.6
 MAX_RETRIES          = 5
@@ -29,12 +44,16 @@ client = openai
 
 
 def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
+    """
+    Initialize or create a worksheet, with robust JSON credential handling.
+    Uses creds_info prepared at import time.
+    """
     scope = [
         'https://spreadsheets.google.com/feeds',
         'https://www.googleapis.com/auth/drive'
     ]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(
-        json.loads(CREDENTIALS_JSON), scope)
+    # Use parsed creds_info dict to create credentials
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
     gs = gspread.authorize(creds)
     try:
         ws = gs.open_by_key(sheet_id).worksheet(sheet_name)
@@ -98,6 +117,7 @@ def regenerate_unique_post(
         mname = model_name.strip().lower()
         if mname in ('', 'none'):
             mname = 'gpt-3.5-turbo'
+        logging.info(f"▶️ 모델 호출: {mname}")  # Debug: show exact model
         try:
             resp = client.ChatCompletion.create(
                 model=mname,
@@ -194,7 +214,7 @@ def pick_rows(src_ws, count=SELECT_COUNT) -> List[List[str]]:
             deadline = datetime.datetime.strptime(r[1], "%Y-%m-%d").date()
             if deadline >= today:
                 valid.append(r)
-        except:
+        except Exception:
             continue
     return random.sample(valid, min(count, len(valid))) if valid else []
 
@@ -225,18 +245,18 @@ def process_regeneration():
         if not prompts:
             logging.warning(f"⚠️ '{site_cat}'에 대응하는 활성 프롬프트가 없습니다.")
             continue
-        config = random.choice(prompts)
+        config     = random.choice(prompts)
         prompt_cfg = config[:6]
-        mode_raw = config[6].strip().lower()  # L
-        gap = int(config[7]) if config[7].isdigit() else 0  # M
-        basic = config[8].strip().lower()
-        adv = config[9].strip().lower()
+        mode_raw   = config[6].strip().lower()  # L
+        gap        = int(config[7]) if config[7].isdigit() else 0  # M
+        basic      = config[8].strip().lower()
+        adv        = config[9].strip().lower()
 
         # Determine mode and models
-        is_hybrid = (mode_raw == '하이브리드')
-        basic_model = 'gpt-3.5-turbo' if basic in ('', 'none') else basic
-        adv_model = basic_model if adv in ('', 'none') else adv
-        models = [basic_model]
+        is_hybrid    = (mode_raw == '하이브리드')
+        basic_model  = 'gpt-3.5-turbo' if basic in ('', 'none') else basic
+        adv_model    = basic_model if adv in ('', 'none') else adv
+        models       = [basic_model]
         if is_hybrid:
             models = [basic_model] * gap + [adv_model]
 
@@ -247,11 +267,11 @@ def process_regeneration():
             )
             total_tokens += tries * 3000
             title = regenerate_title(content)
-            tags = extract_tags(content)
-            en   = translate_text(content, "English")
-            zh   = translate_text(content, "Chinese")
-            ja   = translate_text(content, "Japanese")
-            img  = find_matching_image(tags, image_ws)
+            tags  = extract_tags(content)
+            en    = translate_text(content, "English")
+            zh    = translate_text(content, "Chinese")
+            ja    = translate_text(content, "Japanese")
+            img   = find_matching_image(tags, image_ws)
 
             info_ws.append_row([
                 now_str(), title, content,
