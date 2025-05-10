@@ -13,13 +13,12 @@ import openai
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ── 환경변수 로드 ─────────────────────────────────────────────────────────────────
-RAW_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
-GSHEET_ID = os.getenv("GSHEET_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = "gpt-3.5-turbo"  # ✅ 고정 모델
+RAW_JSON        = os.getenv("GSHEET_CREDENTIALS_JSON")
+RAINDROP_TOKEN  = os.getenv("RAINDROP_TOKEN")
+GSHEET_ID       = os.getenv("GSHEET_ID")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+GPT_MODEL       = "gpt-3.5-turbo"
 
-# ── 필수 환경변수 체크 ─────────────────────────────────────────────────────────────
 for name, val in [
     ("GSHEET_CREDENTIALS_JSON", RAW_JSON),
     ("RAINDROP_TOKEN", RAINDROP_TOKEN),
@@ -44,7 +43,7 @@ if not creds_info.get("private_key", "").startswith("-----BEGIN PRIVATE KEY-----
     raise ValueError("❌ 잘못된 서비스 계정 JSON입니다.")
 
 # ── Google Sheets 인증 ────────────────────────────────────────────────────────────
-creds = GCredentials.from_service_account_info(
+creds   = GCredentials.from_service_account_info(
     creds_info,
     scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
 )
@@ -71,25 +70,34 @@ def get_raindrop_prompt_by_tag(site_category, tag):
     global cached_prompt_rows
     if cached_prompt_rows is None:
         sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
-        cached_prompt_rows = sheet.get_values("A1:K100")  # ✅ 프롬프트 시트 최적화 범위
+        # A:생성일자, B:출처, C:사이트분류, D:Tag, E:현재사용여부, F~K:프롬프트 항목
+        cached_prompt_rows = sheet.get_values("A1:K100")
 
     for row in cached_prompt_rows[1:]:
         if len(row) < 11:
             continue
+
+        source    = row[1].strip().lower()       # B열: 출처
+        site_cat  = row[2].strip()               # C열: 사이트분류
+        tag_val   = row[3].strip()               # D열: Tag
+        use_flag  = row[4].strip().upper()       # E열: 현재사용여부
+
         if (
-            row[1].strip().lower() == "raindrop" and
-            row[2].strip() == site_category and
-            row[3].strip() == tag and
-            row[4].strip().upper() == "Y"
+            source    == "raindrop" and
+            site_cat  == site_category and
+            tag_val   == tag and
+            use_flag  == "Y"
         ):
             return {
-                "role": row[5],
-                "conditions": row[6],
-                "structure": row[7],
-                "must_include": row[8],
-                "conclusion": row[9],
-                "extra": row[10]
+                "role":         row[5],  # F열: 작성자 역할 설명
+                "conditions":   row[6],  # G열: 전체 작성 조건
+                "structure":    row[7],  # H열: 글 구성방식
+                "must_include": row[8],  # I열: 필수 포함 항목
+                "conclusion":   row[9],  # J열: 마무리 문장
+                "extra":        row[10], # K열: 추가 지시사항
             }
+
+    logging.warning(f"[프롬프트 매칭 실패] site_category='{site_category}', tag='{tag}'")
     return None
 
 # ── GPT 요약 생성 ─────────────────────────────────────────────────────────────────
@@ -134,6 +142,7 @@ def generate_blog_style_summary(title, url, text, tags, site_category):
         except Exception as e:
             logging.warning(f"GPT 생성 실패: {e}")
             time.sleep(3)
+
     return "[GPT 생성 실패]"
 
 # ── Raindrop API 호출 및 처리 ────────────────────────────────────────────────────
@@ -144,50 +153,48 @@ def fetch_and_process_raindrop():
     coll_map = {}
     try:
         coll_res = requests.get("https://api.raindrop.io/rest/v1/collections", headers=auth_header)
-        if coll_res.status_code == 200:
-            for c in coll_res.json().get("items", []):
-                cid_val = c.get("id") or c.get("_id") or c.get("$id")
-                cid = str(cid_val) if cid_val is not None else ""
-                coll_map[cid] = c.get("title", "")
+        coll_res.raise_for_status()
+        for c in coll_res.json().get("items", []):
+            cid_val = c.get("id") or c.get("_id") or c.get("$id")
+            cid = str(cid_val) if cid_val is not None else ""
+            coll_map[cid] = c.get("title", "")
     except Exception as e:
         logging.error("❌ 컬렉션 API 호출 오류: %s", e)
 
     # 2) Raindrop 항목 불러오기
     res = requests.get("https://api.raindrop.io/rest/v1/raindrops/0", headers=auth_header)
-    if res.status_code != 200:
-        raise Exception(f"Raindrop API 호출 실패: {res.text}")
+    res.raise_for_status()
     items = res.json().get('items', [])
 
     # 3) 시트 세팅
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
-    sheet.update(values=[["작성일시", "제목", "요약", "링크", "태그", "사이트 분류", "컬렉션 ID"]], range_name='A1:G1')
+    sheet.update(
+        values=[["작성일시","제목","요약","링크","태그","사이트 분류","컬렉션 ID"]],
+        range_name='A1:G1'
+    )
     existing_links = set(sheet.col_values(4)[1:])
     added = 0
 
     for item in items:
-        title = item.get("title")
-        link = item.get("link")
-        tags = item.get("tags", [])
-        if not (title and link and tags):
-            continue
-        if link in existing_links:
+        title = item.get("title"); link = item.get("link"); tags = item.get("tags", [])
+        if not (title and link and tags) or link in existing_links:
             continue
 
         content = extract_main_text(link)
         if not content:
             continue
 
-        # 컬렉션 이름으로 사이트 분류 추정
-        coll = item.get("collection")
-        raw_id = coll.get("id") if isinstance(coll, dict) else coll
-        cid = str(raw_id or "")
-        cname = coll_map.get(cid, "(unknown)")
+        coll    = item.get("collection")
+        raw_id  = coll.get("id") if isinstance(coll, dict) else coll
+        cid     = str(raw_id or "")
+        cname   = coll_map.get(cid, "(unknown)")
 
         summary = generate_blog_style_summary(title, link, content, tags, cname)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tag_str = ", ".join(tags)
 
-        row = [now, title, summary, link, tag_str, cname, cid]
+        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tag_str = ", ".join(tags)
+        row     = [now, title, summary, link, tag_str, cname, cid]
+
         sheet.append_row(row)
         existing_links.add(link)
         added += 1
