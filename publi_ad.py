@@ -57,7 +57,6 @@ def clean_content(text: str) -> str:
 
 
 def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List[dict]:
-    # cfg: [F~K] 6 elements
     purpose, tone, para, emphasis, fmt, etc = cfg
     system = f"""{purpose}
 
@@ -87,10 +86,6 @@ def regenerate_unique_post(
     prompt_text_cfg: List[str],
     model_name: str
 ) -> Tuple[str, float, int]:
-    """
-    Rewrites `original` using GPT `model_name` with prompt defined by `prompt_text_cfg`.
-    Performs up to MAX_RETRIES to ensure similarity < SIMILARITY_THRESHOLD.
-    """
     messages = build_messages_from_prompt(prompt_text_cfg, original_title, original)
     regen, score = original, 1.0
     for attempt in range(1, MAX_RETRIES + 1):
@@ -100,12 +95,24 @@ def regenerate_unique_post(
             max_tokens = 2500
         elif '2000자' in mlower:
             max_tokens = 2000
-        resp = client.ChatCompletion.create(
-            model=model_name,
-            messages=messages,
-            temperature=0.8,
-            max_tokens=max_tokens
-        )
+        mname = model_name.strip().lower()
+        if mname in ('', 'none'):
+            mname = 'gpt-3.5-turbo'
+        try:
+            resp = client.ChatCompletion.create(
+                model=mname,
+                messages=messages,
+                temperature=0.8,
+                max_tokens=max_tokens
+            )
+        except openai.error.InvalidRequestError as e:
+            logging.error(f"❌ Invalid model '{mname}', fallback to 'gpt-3.5-turbo': {e}")
+            resp = client.ChatCompletion.create(
+                model='gpt-3.5-turbo',
+                messages=messages,
+                temperature=0.8,
+                max_tokens=max_tokens
+            )
         candidate = clean_content(resp.choices[0].message.content)
         sim = max(calculate_similarity(candidate, ex) for ex in existing_texts) if existing_texts else 0
         if sim < SIMILARITY_THRESHOLD:
@@ -169,16 +176,11 @@ def now_str() -> str:
 
 
 def extract_valid_prompt(prompt_ws, source: str, site_category: str) -> List[List[str]]:
-    """
-    Filters prompt rows by:
-      B열 == source, C열 == site_category, E열 == 'Y'.
-    Returns each valid row's F~O columns as list.
-    """
     valid = []
     for r in prompt_ws.get_all_values()[1:]:
         if (r[1].strip() == source and
             r[2].strip() == site_category and
-            r[4].strip() == 'Y'):
+            r[4].strip().lower() not in ('', 'none') and r[4].strip() == 'Y'):
             valid.append(r[5:15])  # F~O
     return valid
 
@@ -218,32 +220,30 @@ def process_regeneration():
     total_tokens = 0
 
     for row in selected:
-        site_cat = row[2]
+        site_cat = row[2].strip()
         prompts = extract_valid_prompt(prompt_ws, source="marketing", site_category=site_cat)
         if not prompts:
             logging.warning(f"⚠️ '{site_cat}'에 대응하는 활성 프롬프트가 없습니다.")
             continue
         config = random.choice(prompts)
-        prompt_text_cfg = config[:6]  # F~K
-        mode = config[6]              # L
+        prompt_cfg = config[:6]
+        mode_raw = config[6].strip().lower()  # L
         gap = int(config[7]) if config[7].isdigit() else 0  # M
-        basic = config[8]             # N
-        advanced = config[9]          # O
+        basic = config[8].strip().lower()
+        adv = config[9].strip().lower()
 
-        original = row[4]
-        if not original:
-            logging.warning(f"⚠️ 내용이 비어 있음: {row}")
-            continue
-
-        # GPT 모델 분배: 하이브리드 or 일반(None)
-        if mode == '하이브리드':
-            models = [basic]*gap + [advanced]
-        else:
-            models = [basic]
+        # Determine mode and models
+        is_hybrid = (mode_raw == '하이브리드')
+        basic_model = 'gpt-3.5-turbo' if basic in ('', 'none') else basic
+        adv_model = basic_model if adv in ('', 'none') else adv
+        models = [basic_model]
+        if is_hybrid:
+            models = [basic_model] * gap + [adv_model]
 
         for model_name in models:
+            logging.info(f"▶️ Using model '{model_name}'")
             content, score, tries = regenerate_unique_post(
-                "", original, all_texts, prompt_text_cfg, model_name
+                row[0], row[4], all_texts, prompt_cfg, model_name
             )
             total_tokens += tries * 3000
             title = regenerate_title(content)
