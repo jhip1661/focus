@@ -9,50 +9,56 @@ import difflib
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from openai import OpenAI  # ✅ v1.x 클라이언트 import
+import openai  # ✅ OpenAI 모듈 전체 import
 
 # 🔐 환경 변수에서 JSON 문자열 읽고 줄바꿈 처리
-CREDENTIALS_JSON   = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
-SOURCE_DB_ID       = os.getenv("SOURCE_DB_ID")
-TARGET_DB_ID       = os.getenv("TARGET_DB_ID")
-OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
+CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON", "").replace('\\n', '\n')
+SOURCE_DB_ID     = os.getenv("SOURCE_DB_ID")
+TARGET_DB_ID     = os.getenv("TARGET_DB_ID")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
 
 SIMILARITY_THRESHOLD = 0.6
 MAX_RETRIES          = 5
 SELECT_COUNT         = 5
 
-# 🔑 OpenAI 클라이언트 설정 (v1.x)
+# 🔑 OpenAI 클라이언트 설정
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 없습니다.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
+client = openai
+
 
 def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     scope = [
         'https://spreadsheets.google.com/feeds',
         'https://www.googleapis.com/auth/drive'
     ]
-    creds_dict = json.loads(CREDENTIALS_JSON)
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        json.loads(CREDENTIALS_JSON), scope)
     gs = gspread.authorize(creds)
     try:
         ws = gs.open_by_key(sheet_id).worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        ws = gs.open_by_key(sheet_id).add_worksheet(title=sheet_name, rows="1000", cols="20")
+        ws = gs.open_by_key(sheet_id).add_worksheet(
+            title=sheet_name, rows="1000", cols="20")
     if header:
-        first = ws.row_values(1)
-        if first != header:
+        if ws.row_values(1) != header:
             ws.clear()
             ws.append_row(header)
     return ws
 
+
 def calculate_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
+
 
 def clean_content(text: str) -> str:
     return re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)[:\-]?\s*', '', text).strip()
 
-def build_messages_from_prompt(prompt_cfg: List[str], title: str, content: str) -> List[dict]:
-    purpose, tone, para, emphasis, fmt, etc = prompt_cfg
+
+def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List[dict]:
+    # cfg: [F~K] 6 elements
+    purpose, tone, para, emphasis, fmt, etc = cfg
     system = f"""{purpose}
 
 {tone}
@@ -73,45 +79,44 @@ def build_messages_from_prompt(prompt_cfg: List[str], title: str, content: str) 
         {"role": "user",   "content": user.strip()}
     ]
 
+
 def regenerate_unique_post(
     original_title: str,
     original: str,
     existing_texts: List[str],
-    prompt_cfg: List[str],
-    model_name: str = None
+    prompt_text_cfg: List[str],
+    model_name: str
 ) -> Tuple[str, float, int]:
-    if model_name is None:
-        model_name = prompt_cfg[-1]
+    """
+    Rewrites `original` using GPT `model_name` with prompt defined by `prompt_text_cfg`.
+    Performs up to MAX_RETRIES to ensure similarity < SIMILARITY_THRESHOLD.
+    """
+    messages = build_messages_from_prompt(prompt_text_cfg, original_title, original)
     regen, score = original, 1.0
     for attempt in range(1, MAX_RETRIES + 1):
-        msgs = build_messages_from_prompt(prompt_cfg, original_title, original)
-        etc_lower = prompt_cfg[-1].lower()
-        if "3000자" in etc_lower:
-            max_tokens = 3000
-        elif "2500자" in etc_lower:
+        max_tokens = 3000
+        mlower = model_name.lower()
+        if '2500자' in mlower:
             max_tokens = 2500
-        elif "2000자" in etc_lower:
+        elif '2000자' in mlower:
             max_tokens = 2000
-        else:
-            max_tokens = 3000
-
-        resp = client.chat.completions.create(
+        resp = client.ChatCompletion.create(
             model=model_name,
-            messages=msgs,
+            messages=messages,
             temperature=0.8,
             max_tokens=max_tokens
         )
-        candidate = clean_content(resp.choices[0].message.content.strip())
+        candidate = clean_content(resp.choices[0].message.content)
         sim = max(calculate_similarity(candidate, ex) for ex in existing_texts) if existing_texts else 0
         if sim < SIMILARITY_THRESHOLD:
             return candidate, sim, attempt
         regen, score = candidate, sim
-
     return regen, score, MAX_RETRIES
+
 
 def regenerate_title(content: str) -> str:
     system = "너는 마케팅 콘텐츠 전문가야. 아래 내용을 보고 클릭을 유도하는 짧은 제목을 작성해줘."
-    resp = client.chat.completions.create(
+    resp = client.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system},
@@ -120,12 +125,12 @@ def regenerate_title(content: str) -> str:
         temperature=0.7,
         max_tokens=800
     )
-    title = resp.choices[0].message.content.strip()
-    return re.sub(r'^.*?:\s*', '', title)
+    return re.sub(r'^.*?:\s*', '', resp.choices[0].message.content.strip())
+
 
 def extract_tags(text: str) -> List[str]:
     prompt = f"다음 글에서 실무 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
-    resp = client.chat.completions.create(
+    resp = client.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
@@ -134,12 +139,13 @@ def extract_tags(text: str) -> List[str]:
         temperature=0,
         max_tokens=50
     )
-    return re.findall(r'#(\w+)', resp.choices[0].message.content.strip())[:5]
+    return re.findall(r'#(\w+)', resp.choices[0].message.content)[:5]
+
 
 def translate_text(text: str, lang: str) -> str:
-    langs  = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
+    langs = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
     target = langs.get(lang, lang)
-    resp = client.chat.completions.create(
+    resp = client.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": f"다음을 {target}로 번역해줘."},
@@ -150,86 +156,111 @@ def translate_text(text: str, lang: str) -> str:
     )
     return resp.choices[0].message.content.strip()
 
+
 def find_matching_image(tags: List[str], image_ws) -> str:
     for row in image_ws.get_all_values()[1:]:
         if any(tag in row[0] for tag in tags):
             return row[1]
     return ""
 
+
 def now_str() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def extract_valid_prompt(prompt_ws) -> List[List[str]]:
-    return [
-        r[4:10] for r in prompt_ws.get_all_values()[1:]
-        if r[1].strip() == '재생산' and r[3].strip() == 'Y'
-    ]
+
+def extract_valid_prompt(prompt_ws, source: str, site_category: str) -> List[List[str]]:
+    """
+    Filters prompt rows by:
+      B열 == source, C열 == site_category, E열 == 'Y'.
+    Returns each valid row's F~O columns as list.
+    """
+    valid = []
+    for r in prompt_ws.get_all_values()[1:]:
+        if (r[1].strip() == source and
+            r[2].strip() == site_category and
+            r[4].strip() == 'Y'):
+            valid.append(r[5:15])  # F~O
+    return valid
+
 
 def pick_rows(src_ws, count=SELECT_COUNT) -> List[List[str]]:
     rows = src_ws.get_all_values()[1:]
-    return random.sample(rows, min(count, len(rows))) if rows else []
+    today = datetime.datetime.now().date()
+    valid = []
+    for r in rows:
+        try:
+            deadline = datetime.datetime.strptime(r[1], "%Y-%m-%d").date()
+            if deadline >= today:
+                valid.append(r)
+        except:
+            continue
+    return random.sample(valid, min(count, len(valid))) if valid else []
 
-def estimate_cost(tokens: int, model: str = "gpt-3.5-turbo") -> float:
-    rate = 0.0015 if model == "gpt-3.5-turbo" else 0.03
-    return round(tokens/1000 * rate, 4)
 
 def process_regeneration():
     logging.basicConfig(level=logging.INFO)
     logging.info("📌 process_regeneration() 시작")
 
-    src_ws    = init_worksheet(SOURCE_DB_ID, "xls")
+    src_ws    = init_worksheet(SOURCE_DB_ID, "marketing")
     prompt_ws = init_worksheet(SOURCE_DB_ID, "prompt")
     image_ws  = init_worksheet(SOURCE_DB_ID, "image")
     info_ws   = init_worksheet(
-        TARGET_DB_ID, "information",
+        TARGET_DB_ID, "advertising",
         ["작성일시","제목","내용","태그","영문","중문","일문","표절률","이미지url"]
     )
 
     selected = pick_rows(src_ws)
-    logging.info(f"🎯 선택된 행 수: {len(selected)}")
     if not selected:
-        logging.warning("⚠️ 본문 시트에서 선택할 수 있는 행이 없습니다.")
+        logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다 (마감일 지남).")
         return 0
 
-    prompts = extract_valid_prompt(prompt_ws)
-    logging.info(f"🎯 프롬프트 수: {len(prompts)}")
-    if not prompts:
-        logging.warning("⚠️ 사용 가능한 프롬프트가 없습니다.")
-        return 0
-
-    config      = random.choice(prompts)
-    all_texts   = [r[2] for r in src_ws.get_all_values()[1:] if len(r)>2]
+    all_texts = [r[4] for r in selected]
     total_tokens = 0
 
     for row in selected:
-        original_title = row[1] if len(row)>1 else ""
-        original       = row[2] if len(row)>2 else ""
+        site_cat = row[2]
+        prompts = extract_valid_prompt(prompt_ws, source="marketing", site_category=site_cat)
+        if not prompts:
+            logging.warning(f"⚠️ '{site_cat}'에 대응하는 활성 프롬프트가 없습니다.")
+            continue
+        config = random.choice(prompts)
+        prompt_text_cfg = config[:6]  # F~K
+        mode = config[6]              # L
+        gap = int(config[7]) if config[7].isdigit() else 0  # M
+        basic = config[8]             # N
+        advanced = config[9]          # O
+
+        original = row[4]
         if not original:
-            logging.warning(f"⚠️ 본문이 비어 있음: {row}")
+            logging.warning(f"⚠️ 내용이 비어 있음: {row}")
             continue
 
-        content, score, tries = regenerate_unique_post(
-            original_title, original, all_texts, config
-        )
-        total_tokens += tries * 3000
-        new_title = regenerate_title(content)
-        tags      = extract_tags(content)
-        en        = translate_text(content, "English")
-        zh        = translate_text(content, "Chinese")
-        ja        = translate_text(content, "Japanese")
-        img       = find_matching_image(tags, image_ws)
+        # GPT 모델 분배: 하이브리드 or 일반(None)
+        if mode == '하이브리드':
+            models = [basic]*gap + [advanced]
+        else:
+            models = [basic]
 
-        try:
+        for model_name in models:
+            content, score, tries = regenerate_unique_post(
+                "", original, all_texts, prompt_text_cfg, model_name
+            )
+            total_tokens += tries * 3000
+            title = regenerate_title(content)
+            tags = extract_tags(content)
+            en   = translate_text(content, "English")
+            zh   = translate_text(content, "Chinese")
+            ja   = translate_text(content, "Japanese")
+            img  = find_matching_image(tags, image_ws)
+
             info_ws.append_row([
-                now_str(), new_title, content,
+                now_str(), title, content,
                 ", ".join(tags), en, zh, ja,
                 f"{score:.2f}", img
             ])
-            logging.info(f"✅ '{new_title}' 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
-        except Exception as e:
-            logging.error(f"❌ 시트 쓰기 실패: {e}")
+            logging.info(f"✅ '{title}' ({model_name}) 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
 
-    logging.info(f"💰 예상 비용: ${estimate_cost(total_tokens)}")
+    logging.info(f"💰 예상 비용: ${round(total_tokens/1000*0.0015,4)}")
     return len(selected)
 
 if __name__ == "__main__":
