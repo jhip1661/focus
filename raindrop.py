@@ -13,11 +13,11 @@ import openai
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ── 환경변수 로드 ─────────────────────────────────────────────────────────────────
-RAW_JSON        = os.getenv("GSHEET_CREDENTIALS_JSON")
-RAINDROP_TOKEN  = os.getenv("RAINDROP_TOKEN")
-GSHEET_ID       = os.getenv("GSHEET_ID")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
-GPT_MODEL       = "gpt-3.5-turbo"
+RAW_JSON       = os.getenv("GSHEET_CREDENTIALS_JSON")
+RAINDROP_TOKEN = os.getenv("RAINDROP_TOKEN")
+GSHEET_ID      = os.getenv("GSHEET_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GPT_MODEL      = "gpt-3.5-turbo"
 
 for name, val in [
     ("GSHEET_CREDENTIALS_JSON", RAW_JSON),
@@ -36,8 +36,7 @@ client = openai
 try:
     creds_info = json.loads(RAW_JSON)
 except json.JSONDecodeError:
-    fixed = RAW_JSON.replace('\\n', '\n')
-    creds_info = json.loads(fixed)
+    creds_info = json.loads(RAW_JSON.replace('\\n', '\n'))
 
 if not creds_info.get("private_key", "").startswith("-----BEGIN PRIVATE KEY-----"):
     raise ValueError("❌ 잘못된 서비스 계정 JSON입니다.")
@@ -77,10 +76,10 @@ def get_raindrop_prompt_by_tag(site_category, tag):
         if len(row) < 11:
             continue
 
-        source    = row[1].strip().lower()       # B열: 출처
-        site_cat  = row[2].strip()               # C열: 사이트분류
-        tag_val   = row[3].strip()               # D열: Tag
-        use_flag  = row[4].strip().upper()       # E열: 현재사용여부
+        source    = row[1].strip().lower()   # B열: 출처
+        site_cat  = row[2].strip()           # C열: 사이트분류
+        tag_val   = row[3].strip()           # D열: Tag
+        use_flag  = row[4].strip().upper()   # E열: 현재사용여부
 
         if (
             source    == "raindrop" and
@@ -94,7 +93,7 @@ def get_raindrop_prompt_by_tag(site_category, tag):
                 "structure":    row[7],  # H열: 글 구성방식
                 "must_include": row[8],  # I열: 필수 포함 항목
                 "conclusion":   row[9],  # J열: 마무리 문장
-                "extra":        row[10], # K열: 추가 지시사항
+                "extra":        row[10]  # K열: 추가 지시사항
             }
 
     logging.warning(f"[프롬프트 매칭 실패] site_category='{site_category}', tag='{tag}'")
@@ -166,17 +165,19 @@ def fetch_and_process_raindrop():
     res.raise_for_status()
     items = res.json().get('items', [])
 
-    # 3) 시트 세팅
+    # 3) 시트 초기화
     sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
     sheet.update(
-        values=[["작성일시","제목","요약","링크","태그","사이트 분류","컬렉션 ID"]],
+        values=[["작성일시","제목","요약","링크","태그","사이트분류","컬렉션 ID"]],
         range_name='A1:G1'
     )
     existing_links = set(sheet.col_values(4)[1:])
     added = 0
 
     for item in items:
-        title = item.get("title"); link = item.get("link"); tags = item.get("tags", [])
+        title = item.get("title")
+        link  = item.get("link")
+        tags  = item.get("tags", [])
         if not (title and link and tags) or link in existing_links:
             continue
 
@@ -184,21 +185,25 @@ def fetch_and_process_raindrop():
         if not content:
             continue
 
-        coll    = item.get("collection")
-        raw_id  = coll.get("id") if isinstance(coll, dict) else coll
-        cid     = str(raw_id or "")
-        cname   = coll_map.get(cid, "(unknown)")
+        # ▶ 컬렉션 ID & 이름 추출 (collection.$id)
+        coll = item.get("collection")
+        if isinstance(coll, dict):
+            raw_id = coll.get("id") or coll.get("_id") or coll.get("$id")
+        else:
+            raw_id = coll
+        cid = str(raw_id) if raw_id is not None else ""
+        cname = coll_map.get(cid, "")
 
         summary = generate_blog_style_summary(title, link, content, tags, cname)
 
-        now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tag_str = ", ".join(tags)
-        row     = [now, title, summary, link, tag_str, cname, cid]
+        row    = [now, title, summary, link, tag_str, cname, cid]
 
         sheet.append_row(row)
         existing_links.add(link)
         added += 1
-        logging.info(f"➕ 추가됨: {title} (사이트 분류: {cname}, ID: {cid})")
+        logging.info(f"➕ 추가됨: {title} (사이트분류: '{cname}', ID: {cid})")
 
     logging.info(f"✅ 처리 완료: {added}개 추가됨")
     return added
