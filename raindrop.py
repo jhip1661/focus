@@ -21,14 +21,14 @@ OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
 GPT_MODEL       = "gpt-3.5-turbo"
 
 # ── 필수 환경변수 체크 ─────────────────────────────────────────────────────────────
-if not RAW_JSON:
-    raise ValueError("❌ 환경변수 'GSHEET_CREDENTIALS_JSON'이 누락되었습니다.")
-if not RAINDROP_TOKEN:
-    raise ValueError("❌ 환경변수 'RAINDROP_TOKEN'이 누락되었습니다.")
-if not GSHEET_ID:
-    raise ValueError("❌ 환경변수 'GSHEET_ID'이 누락되었습니다.")
-if not OPENAI_API_KEY:
-    raise ValueError("❌ 환경변수 'OPENAI_API_KEY'이 누락되었습니다.")
+for name, val in [
+    ("GSHEET_CREDENTIALS_JSON", RAW_JSON),
+    ("RAINDROP_TOKEN", RAINDROP_TOKEN),
+    ("GSHEET_ID", GSHEET_ID),
+    ("OPENAI_API_KEY", OPENAI_API_KEY),
+]:
+    if not val:
+        raise ValueError(f"❌ 환경변수 '{name}'이(가) 누락되었습니다.")
 
 # ── OpenAI 클라이언트 설정 ─────────────────────────────────────────────────────────
 openai.api_key = OPENAI_API_KEY
@@ -40,32 +40,26 @@ try:
     logging.info("✅ JSON 파싱(원본) 성공")
 except json.JSONDecodeError:
     fixed = RAW_JSON.replace('\\n', '\n')
-    try:
-        creds_info = json.loads(fixed)
-        logging.info("✅ JSON 파싱(복원) 성공")
-    except json.JSONDecodeError as e2:
-        raise ValueError(f"❌ SERVICE_ACCOUNT_JSON 파싱 실패: {e2}")
+    creds_info = json.loads(fixed)
+    logging.info("✅ JSON 파싱(복원) 성공")
 
-if "private_key" not in creds_info or not creds_info["private_key"].startswith(
-        "-----BEGIN PRIVATE KEY-----"):
+if not creds_info.get("private_key", "").startswith("-----BEGIN PRIVATE KEY-----"):
     raise ValueError(
-        "❌ 잘못된 서비스 계정 JSON입니다. 환경변수에 전체 JSON을 정확히 복사했는지, "
+        "❌ 잘못된 서비스 계정 JSON입니다. "
+        "환경변수에 전체 JSON을 정확히 복사했는지, "
         "서비스 계정 이메일이 스프레드시트에 공유되어 있는지 확인하세요."
     )
 
 # ── Google Sheets 인증 ────────────────────────────────────────────────────────────
-try:
-    creds = GCredentials.from_service_account_info(
-        creds_info,
-        scopes=[
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets"
-        ]
-    )
-    gclient = gspread.authorize(creds)
-    logging.info("✅ Google Sheets 인증 완료")
-except Exception as e:
-    raise RuntimeError(f"❌ 인증 정보 로드 실패: {e}")
+creds = GCredentials.from_service_account_info(
+    creds_info,
+    scopes=[
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+    ]
+)
+gclient = gspread.authorize(creds)
+logging.info("✅ Google Sheets 인증 완료")
 
 # ── 본문 추출 함수 ─────────────────────────────────────────────────────────────────
 def extract_main_text(url):
@@ -149,13 +143,6 @@ def generate_blog_style_summary(title, url, text, tags):
             time.sleep(3)
     return "[GPT 생성 실패]"
 
-# ── Google Sheets 행 추가 ─────────────────────────────────────────────────────────
-def append_to_fixed_sheet(row):
-    sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
-    existing = set(sheet.col_values(2))
-    if row[1] not in existing:
-        sheet.append_row(row)
-
 # ── Raindrop API 호출 및 처리 ────────────────────────────────────────────────────
 def fetch_and_process_raindrop():
     headers = {"Authorization": f"Bearer {RAINDROP_TOKEN}"}
@@ -165,16 +152,26 @@ def fetch_and_process_raindrop():
         raise Exception(f"Raindrop API 호출 실패: {res.text}")
 
     data = res.json()
-    if 'items' not in data:
-        logging.error("❌ Raindrop 응답 형식 오류")
+    items = data.get('items', [])
+    if not items:
+        logging.info("❌ Raindrop 응답 형식 오류 또는 항목 없음")
         return 0
 
+    # ── “support business” 시트 및 기존 링크 캐싱 ─────────────────────────────────
+    sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
+    existing_links = set(sheet.col_values(4)[1:])
+
     added = 0
-    for item in data['items']:
+    for item in items:
         title = item.get("title")
         link  = item.get("link")
         tags  = item.get("tags", [])
         if not (title and link and tags):
+            continue
+
+        # 이미 처리된 링크면 건너뛰기
+        if link in existing_links:
+            logging.debug(f"스킵(이미 처리됨): {link}")
             continue
 
         content = extract_main_text(link)
@@ -185,10 +182,13 @@ def fetch_and_process_raindrop():
         now     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tag_str = ", ".join(tags)
         row     = [now, title, summary, link, tag_str]
-        append_to_fixed_sheet(row)
-        added += 1
 
-    logging.info(f"✅ 처리 완료: {added}개 항목 추가")
+        sheet.append_row(row)
+        existing_links.add(link)
+        added += 1
+        logging.info(f"➕ 추가됨: {title}")
+
+    logging.info(f"✅ 처리 완료: 총 {added}개 항목 추가")
     return added
 
 # ── 스크립트 실행 ───────────────────────────────────────────────────────────────
