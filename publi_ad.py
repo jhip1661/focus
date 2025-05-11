@@ -27,7 +27,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 SIMILARITY_THRESHOLD = 0.6
 MAX_RETRIES          = 5
-SELECT_COUNT         = 5
 
 # 🔑 OpenAI 클라이언트 설정
 if not OPENAI_API_KEY:
@@ -47,9 +46,11 @@ def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
         ws = gs.open_by_key(sheet_id).worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
         ws = gs.open_by_key(sheet_id).add_worksheet(title=sheet_name, rows="1000", cols="20")
-    if header and ws.row_values(1) != header:
-        ws.clear()
-        ws.append_row(header)
+    if header:
+        first = ws.row_values(1)
+        if first != header:
+            ws.clear()
+            ws.append_row(header)
     return ws
 
 
@@ -63,67 +64,88 @@ def clean_content(text: str) -> str:
 
 def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List[dict]:
     purpose, tone, para, emphasis, fmt, etc = cfg
-    system = f"""{purpose}
-
-{tone}
-
-{para}
-
-{emphasis}
-
-{fmt}
-
-{etc}"""
-    user = f"""다음 글을 중복되지 않도록 재작성해줘:
-
-제목: {title}
-내용: {content}"""
-    return [{"role": "system", "content": system.strip()}, {"role": "user", "content": user.strip()}]
+    system = f"""{purpose}\n\n{tone}\n\n{para}\n\n{emphasis}\n\n{fmt}\n\n{etc}"""
+    user = f"""다음 글을 중복되지 않도록 재작성해줘:\n\n제목: {title}\n내용: {content}"""
+    return [
+        {"role": "system", "content": system.strip()},
+        {"role": "user",   "content": user.strip()},
+    ]
 
 
-def regenerate_unique_post(original_title: str, original: str, existing_texts: List[str], prompt_text_cfg: List[str], model_name: str) -> Tuple[str, float, int]:
-    messages = build_messages_from_prompt(prompt_text_cfg, original_title, original)
+def regenerate_unique_post(
+    original_title: str,
+    original: str,
+    existing_texts: List[str],
+    prompt_cfg: List[str],
+    model_name: str,
+) -> Tuple[str, float, int]:
     regen, score = original, 1.0
-    for attempt in range(1, MAX_RETRIES + 1):
+    for i in range(1, MAX_RETRIES + 1):
+        msgs = build_messages_from_prompt(prompt_cfg, original_title, original)
+        etc_lower = prompt_cfg[-1].lower()
         max_tokens = 3000
-        mlower = model_name.lower()
-        if '2500자' in mlower:
+        if '2500자' in etc_lower:
             max_tokens = 2500
-        elif '2000자' in mlower:
+        elif '2000자' in etc_lower:
             max_tokens = 2000
-        mname = model_name.strip().lower()
-        if mname in ('', 'none'):
-            mname = 'gpt-3.5-turbo'
-        logging.info(f"▶️ 모델 호출: {mname}")
         try:
-            resp = client.ChatCompletion.create(model=mname, messages=messages, temperature=0.8, max_tokens=max_tokens)
-        except openai.error.InvalidRequestError as e:
-            logging.error(f"❌ Invalid model '{mname}', fallback to 'gpt-3.5-turbo': {e}")
-            resp = client.ChatCompletion.create(model='gpt-3.5-turbo', messages=messages, temperature=0.8, max_tokens=max_tokens)
-        candidate = clean_content(resp.choices[0].message.content)
-        sim = max(calculate_similarity(candidate, ex) for ex in existing_texts) if existing_texts else 0
+            resp = client.ChatCompletion.create(
+                model=model_name,
+                messages=msgs,
+                temperature=0.8,
+                max_tokens=max_tokens,
+            )
+        except openai.error.InvalidRequestError:
+            resp = client.ChatCompletion.create(
+                model='gpt-3.5-turbo',
+                messages=msgs,
+                temperature=0.8,
+                max_tokens=max_tokens,
+            )
+        candidate = clean_content(resp.choices[0].message.content or '')
+        sim = max((calculate_similarity(candidate, ex) for ex in existing_texts), default=0)
         if sim < SIMILARITY_THRESHOLD:
-            return candidate, sim, attempt
+            return candidate, sim, i
         regen, score = candidate, sim
     return regen, score, MAX_RETRIES
 
 
 def regenerate_title(content: str) -> str:
-    system = "너는 마케팅 콘텐츠 전문가야. 아래 내용을 보고 클릭을 유도하는 짧은 제목을 작성해줘."
-    resp = client.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": system}, {"role": "user", "content": content[:1000]}], temperature=0.7, max_tokens=800)
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
+            {"role": "user",   "content": content[:1000]},
+        ],
+        temperature=0.7,
+        max_tokens=800,
+    )
     return re.sub(r'^.*?:\s*', '', resp.choices[0].message.content.strip())
 
 
 def extract_tags(text: str) -> List[str]:
-    prompt = f"다음 글에서 실무 중심 명사 5개를 해시태그(#키워드) 형태로 추출해줘. 글: {text}"
-    resp = client.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": "당신은 태그 추출 전문가입니다."}, {"role": "user", "content": prompt}], temperature=0, max_tokens=50)
-    return re.findall(r'#(\w+)', resp.choices[0].message.content)[:5]
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "당신은 태그 추출 전문가입니다."},
+            {"role": "user",   "content": f"다음 글에서 실무 중심 명사 5개를 #키워드 형태로 추출해줘. 글: {text}"},
+        ],
+        temperature=0,
+        max_tokens=50,
+    )
+    return re.findall(r"#(\w+)", resp.choices[0].message.content)[:5]
 
 
 def translate_text(text: str, lang: str) -> str:
-    langs = {"English": "English", "Chinese": "Simplified Chinese", "Japanese": "Japanese"}
-    target = langs.get(lang, lang)
-    resp = client.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": f"다음을 {target}로 번역해줘."}, {"role": "user", "content": text}], temperature=0.5, max_tokens=2000)
+    resp = client.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": f"다음을 {lang}로 번역해줘."},
+            {"role": "user",   "content": text},
+        ],
+        temperature=0.5,
+        max_tokens=2000,
+    )
     return resp.choices[0].message.content.strip()
 
 
@@ -138,93 +160,101 @@ def now_str() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def extract_valid_prompt(prompt_ws, source: str, site_category: str) -> List[List[str]]:
-    valid = []
-    for r in prompt_ws.get_all_values()[1:]:
-        if r[1].strip() == source and r[2].strip() == site_category and r[4].strip().lower() == 'y':
-            valid.append(r[5:15])
-    return valid
-
-
-def pick_rows(src_ws, count=SELECT_COUNT) -> List[List[str]]:
-    """
-    Select rows where 마감일(deadline) is today or in the future.
-    Handles formats like 'YYYY.MM.DD', 'YYYY. M. D', or 'YYYY-MM-DD'.
-    """
-    rows = src_ws.get_all_values()[1:]
-    today = datetime.datetime.now().date()
-    valid = []
-    for r in rows:
-        raw_deadline = r[1].strip()
-        # Normalize dots and spaces to hyphens (e.g., '2025.06.25' → '2025-06-25')
-        norm = re.sub(r'[\.\s]+', '-', raw_deadline)
-        norm = re.sub(r'-+', '-', norm)
-        try:
-            deadline = datetime.datetime.strptime(norm, "%Y-%m-%d").date()
-        except ValueError:
-            logging.warning(f"⚠️ 마감일 형식 오류: '{r[1]}' (정규화값: '{norm}')")
-            continue
-        if deadline >= today:
-            valid.append(r)
-        else:
-            logging.info(f"⚠️ 마감일 지남: {deadline} < {today} -> 제외: {r}")
-    if not valid:
-        return []
-    return random.sample(valid, min(count, len(valid)))
-
-
 def process_regeneration():
     logging.basicConfig(level=logging.INFO)
     logging.info("📌 process_regeneration() 시작")
+
+    # 워크시트 초기화
     src_ws    = init_worksheet(SOURCE_DB_ID, "marketing")
     prompt_ws = init_worksheet(SOURCE_DB_ID, "prompt")
     image_ws  = init_worksheet(SOURCE_DB_ID, "image")
-    info_ws   = init_worksheet(TARGET_DB_ID, "advertising", ["작성일시","제목","내용","태그","영문","중문","일문","표절률","이미지url"])
+    info_ws   = init_worksheet(TARGET_DB_ID, "advertising",
+        ["작성일시","제목","내용","태그","영문","중문","일문","표절률","이미지url"]
+    )
 
-    selected = pick_rows(src_ws)
-    if not selected:
-        logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다 (마감일 지남).")
+    # 마감일 기준 필터링된 콘텐츠 목록
+    rows = src_ws.get_all_values()[1:]
+    today = datetime.datetime.now().date()
+    valid_rows = []
+    for r in rows:
+        norm = re.sub(r'[\.\s]+','-', r[1].strip())
+        norm = re.sub(r'-+','-', norm)
+        try:
+            dl = datetime.datetime.strptime(norm, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if dl >= today:
+            valid_rows.append(r)
+    if not valid_rows:
+        logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다.")
         return 0
 
-    all_texts = [r[4] for r in selected]
-    total_tokens = 0
+    # prompt 시트에 run_count 열 확보
+    header = prompt_ws.row_values(1)
+    if 'run_count' not in header:
+        prompt_ws.add_cols(1)
+        prompt_ws.update_cell(1, len(header)+1, 'run_count')
+        run_idx = len(header)+1
+    else:
+        run_idx = header.index('run_count')+1
 
-    for row in selected:
-        site_cat   = row[2].strip()
-        prompts    = extract_valid_prompt(prompt_ws, source="marketing", site_category=site_cat)
-        if not prompts:
-            logging.warning(f"⚠️ '{site_cat}'에 대응하는 활성 프롬프트가 없습니다.")
+    total = 0
+    # 프롬프트별 1사이클 처리
+    prompts = prompt_ws.get_all_values()[1:]
+    for pr_idx, cfg in enumerate(prompts, start=2):
+        # 필터: B='marketing', C=site, E='재생산', F='Y'
+        if len(cfg) < 15:
             continue
-        config     = random.choice(prompts)
-        prompt_cfg = config[:6]
-        mode_raw   = config[6].strip().lower()
-        gap        = int(config[7]) if config[7].isdigit() else 0
-        basic      = config[8].strip().lower()
-        adv        = config[9].strip().lower()
+        if cfg[1].strip()!='marketing' or cfg[4].strip()!='재생산' or cfg[5].strip().upper()!='Y':
+            continue
+        site_category = cfg[2].strip()
+        # 매칭 소스 랜덤 선택
+        matching = [r for r in valid_rows if len(r)>2 and r[2].strip()==site_category]
+        if not matching:
+            logging.warning(f"⚠️ 매칭되는 소스 없음: {site_category}")
+            continue
+        item = random.choice(matching)
 
-        is_hybrid   = (mode_raw == '하이브리드')
-        basic_model = 'gpt-3.5-turbo' if basic in ('', 'none') else basic
-        adv_model   = basic_model if adv in ('', 'none') else adv
-        models      = [basic_model] * (gap if is_hybrid else 1)
-        if is_hybrid:
-            models += [adv_model]
+        # interval/모델 전환
+        prev_count = int(cfg[run_idx-1]) if cfg[run_idx-1].isdigit() else 0
+        interval   = int(cfg[7]) if cfg[7].isdigit() else 1
+        basic_mod  = cfg[8].strip() or 'gpt-3.5-turbo'
+        adv_mod    = cfg[9].strip() or basic_mod
+        if prev_count < interval:
+            use_model = basic_mod
+            new_count = prev_count + 1
+        else:
+            use_model = adv_mod
+            new_count = 0
 
-        for model_name in models:
-            logging.info(f"▶️ Using model '{model_name}'")
-            content, score, tries = regenerate_unique_post(row[0], row[4], all_texts, prompt_cfg, model_name)
-            total_tokens += tries * 3000
-            title = regenerate_title(content)
-            tags  = extract_tags(content)
-            en    = translate_text(content, "English")
-            zh    = translate_text(content, "Chinese")
-            ja    = translate_text(content, "Japanese")
-            img   = find_matching_image(tags, image_ws)
+        # 콘텐츠 생성
+        orig_title = item[0]
+        orig_cont  = item[4]
+        content, score, _ = regenerate_unique_post(
+            orig_title, orig_cont,
+            [r[4] for r in valid_rows],
+            cfg[5:11], use_model
+        )
+        title = regenerate_title(content)
+        tags  = extract_tags(content)
+        en    = translate_text(content, 'English')
+        zh    = translate_text(content, 'Chinese')
+        ja    = translate_text(content, 'Japanese')
+        img   = find_matching_image(tags, image_ws)
 
-            info_ws.append_row([now_str(), title, content, ", ".join(tags), en, zh, ja, f"{score:.2f}", img])
-            logging.info(f"✅ '{title}' ({model_name}) 저장 완료 | 유사도: {score:.2f} | 재시도: {tries}회")
+        # 결과 저장
+        info_ws.append_row([
+            now_str(), title, content,
+            ", ".join(tags), en, zh, ja,
+            f"{score:.2f}", img
+        ])
+        total += 1
 
-    logging.info(f"💰 예상 비용: ${round(total_tokens/1000*0.0015,4)}")
-    return len(selected)
+        # run_count 업데이트
+        prompt_ws.update_cell(pr_idx, run_idx, str(new_count))
 
-if __name__ == "__main__":
+    logging.info(f"💰 총 저장된 글 수: {total}")
+    return total
+
+if __name__ == '__main__':
     process_regeneration()
