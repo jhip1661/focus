@@ -194,56 +194,75 @@ def process_regeneration():
     )
 
     rows    = src_ws.get_all_values()[1:]
-    prompts = prompt_ws.get_all_values()[1:]
     total   = 0
 
-    for row in rows:
-        origin_tag    = row[4] if len(row) > 4 else ""
-        site_category = row[5] if len(row) > 5 else ""
+    # ── 프롬프트 시트에 'run_count' 열 추가(없으면) 및 인덱스 계산 ──
+    header = prompt_ws.row_values(1)
+    if 'run_count' not in header:
+        prompt_ws.add_cols(1)  # ✅ 수정: 작동 횟수 기록 위한 열 추가
+        prompt_ws.update_cell(1, len(header) + 1, 'run_count')
+        run_idx = len(header) + 1
+    else:
+        run_idx = header.index('run_count') + 1
 
-        candidates = [
-            p for p in prompts
-            if len(p) >= 15
-            and p[2].strip() == site_category
-            and p[3].strip() == origin_tag
-            and p[4].strip().upper() == "Y"
-        ]
-        if not candidates:
-            logging.warning(f"⚠️ 매칭되는 프롬프트 없음: site={site_category}, tag={origin_tag}")
+    # ── 각 프롬프트별로 1cycle 수행 ──
+    prompts = prompt_ws.get_all_values()[1:]
+    for pr_idx, cfg in enumerate(prompts, start=2):  # pr_idx = 실제 시트 행 번호
+        if len(cfg) < 15:
+            continue
+        if cfg[4].strip().upper() != 'Y':  # 현재 사용 여부
             continue
 
-        cfg           = random.choice(candidates)
-        prompt_config = cfg[5:11]
-        method        = cfg[11]
+        site_category = cfg[2].strip()
+        origin_tag    = cfg[3].strip()
         interval      = int(cfg[12])
         basic_model   = cfg[13]
         advanced_model= cfg[14]
 
-        count = interval + 1 if method == "하이브리드" else interval
-        selected = random.sample(rows, min(count, len(rows)))
+        # 기존 작동 횟수 읽기
+        prev_count = int(cfg[run_idx-1]) if len(cfg) >= run_idx and cfg[run_idx-1].isdigit() else 0
 
-        for idx, item in enumerate(selected, start=1):
-            use_model      = advanced_model if (method == "하이브리드" and idx == count) else basic_model
-            original_title = item[1] if len(item) > 1 else ""
-            original       = item[2] if len(item) > 2 else ""
+        # 소스 행 중 이 프롬프트에 매칭되는 행들
+        matching = [r for r in rows if len(r)>5 and r[5].strip()==site_category and r[4].strip()==origin_tag]
+        if not matching:
+            logging.warning(f"⚠️ 매칭되는 소스 없음: site={site_category}, tag={origin_tag}")
+            continue
 
-            content, score, _ = regenerate_unique_post(
-                original_title, original,
-                [r[2] for r in rows if len(r) > 2],
-                prompt_config, use_model
-            )
-            new_title = regenerate_title(content)
-            tags      = extract_tags(content)
-            en        = translate_text(content, "English")
-            zh        = translate_text(content, "Chinese")
-            ja        = translate_text(content, "Japanese")
-            img       = find_matching_image(tags, image_ws)
+        # 임의 1개 행 선택 (1cycle)
+        item = random.choice(matching)
 
-            info_ws.append_row([
-                now_str(), origin_tag, site_category, new_title, content,
-                ", ".join(tags), en, zh, ja, f"{score:.2f}", img
-            ])
-            total += 1
+        # 모델 선정: interval까지 basic, 그 다음 cycle에 advanced
+        if prev_count < interval:
+            use_model     = basic_model
+            new_count     = prev_count + 1
+        else:
+            use_model     = advanced_model
+            new_count     = 0  # ✅ 수정: advanced 이후 카운트 리셋
+
+        # ── 콘텐츠 생성 및 저장 ──
+        original_title = item[1] if len(item)>1 else ""
+        original       = item[2] if len(item)>2 else ""
+
+        content, score, _ = regenerate_unique_post(
+            original_title, original,
+            [r[2] for r in rows if len(r)>2],
+            cfg[5:11], use_model
+        )
+        new_title = regenerate_title(content)
+        tags      = extract_tags(content)
+        en        = translate_text(content, "English")
+        zh        = translate_text(content, "Chinese")
+        ja        = translate_text(content, "Japanese")
+        img       = find_matching_image(tags, image_ws)
+
+        info_ws.append_row([
+            now_str(), origin_tag, site_category, new_title, content,
+            ", ".join(tags), en, zh, ja, f"{score:.2f}", img
+        ])
+        total += 1
+
+        # 프롬프트 시트에 새 작동 횟수 기록
+        prompt_ws.update_cell(pr_idx, run_idx, str(new_count))  # ✅ 수정: cycle 수 업데이트
 
     logging.info(f"💰 총 저장된 글 수: {total}")
     return total
