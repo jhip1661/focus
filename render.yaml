@@ -35,6 +35,13 @@ services:
     startCommand: "python publi_sup.py"
 
   - type: cron
+    name: run-nav
+    schedule: "20 */3 * * *"  # 매 3시간마다 20분
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python nav.py"
+
+  - type: cron
     name: run-publi-xls
     schedule: "25 */3 * * *"  # 매 3시간마다 25분
     env: python
