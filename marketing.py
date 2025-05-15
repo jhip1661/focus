@@ -142,7 +142,7 @@ def regenerate_unique_post(
 def regenerate_title(content: str) -> str:
     try:
         resp = client.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
                 {"role": "user",   "content": content[:1000]},
@@ -155,7 +155,7 @@ def regenerate_title(content: str) -> str:
         if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
             new_client = OpenAI(api_key=openai.api_key)
             resp = new_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4-turbo",
                 messages=[
                     {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
                     {"role": "user",   "content": content[:1000]},
