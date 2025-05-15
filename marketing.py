@@ -10,7 +10,6 @@ from typing import List, Tuple
 import gspread
 from google.oauth2.service_account import Credentials as GCredentials
 import openai  # 모듈 전체 import
-from openai import OpenAI  # 신규 SDK 클라이언트
 
 # ── 서비스 계정 JSON: env var 우선, 없으면 로컬 파일에서 로드 ─────────────────
 service_json = os.getenv("GSHEET_CREDENTIALS_JSON", "")
@@ -122,8 +121,8 @@ def regenerate_unique_post(
         except Exception as e:
             from openai.lib._old_api import APIRemovedInV1
             if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-                new_client = OpenAI(api_key=openai.api_key)
-                resp = new_client.chat.completions.create(
+                # fallback to the same openai module
+                resp = openai.ChatCompletion.create(
                     model=model_name,
                     messages=msgs,
                     temperature=0.8,
