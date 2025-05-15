@@ -52,3 +52,10 @@ services:
       else
         echo "📎 xls.py 없음: publi_xls.py 생략"
       fi
+
+  - type: cron
+    name: run-marketing
+    schedule: "0 * * * *"    # 매 시간 정각
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python marketing.py"
