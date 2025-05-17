@@ -52,7 +52,7 @@ config_spreadsheet = gclient.open_by_key(
     "1-cTWVnP3sTwI_gcpuIKt1O-z1qAC8h9INp1kNGMoip0"
 )  # 수정: 설정용 구글 시트 ID (URL에서 가져온)
 config_ws = config_spreadsheet.get_worksheet(0)  # 수정: 첫 번째 워크시트 사용
-GSHEET_ID       = config_ws.acell('B2').value  # 수정: B2에서 실제 작업 시트 ID 읽기
+GSHEET_ID       = config_ws.acell('A2').value  # 수정: B2에서 실제 작업 시트 ID 읽기
 RAINDROP_TOKEN  = config_ws.acell('C2').value  # 수정: C2에서 Raindrop 토큰 읽기
 
 # ── 시트 캐싱 변수 ───────────────────────────────────────────────────────────────
