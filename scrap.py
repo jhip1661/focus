@@ -74,7 +74,7 @@ def extract_main_text(url):
 def get_raindrop_prompt_by_tag(site_category, tag):
     global cached_prompt_rows
     if cached_prompt_rows is None:
-        sheet = gclient.open_by_key(GSHEET_ID).worksheet("prompt")
+        sheet = gclient.open_by_key(GSHEET_ID).worksheet("프롬프트시트")
         # A:생성일자, B:출처, C:이미지태그, D:구분태그, E:현재사용여부, F~K:프롬프트 항목
         cached_prompt_rows = sheet.get_values("A1:K100")
 
