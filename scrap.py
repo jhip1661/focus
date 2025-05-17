@@ -172,7 +172,7 @@ def fetch_and_process_raindrop():
     items = res.json().get('items', [])
 
     # 3) 시트 초기화
-    sheet = gclient.open_by_key(GSHEET_ID).worksheet("support business")
+    sheet = gclient.open_by_key(GSHEET_ID).worksheet("스크랩 시트")
     sheet.update(
         values=[["작성일시","제목","요약","링크","이미지태그","구분태그","컬렉션 ID"]],
         range_name='A1:G1'
