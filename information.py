@@ -47,7 +47,7 @@ if not OPENAI_API_KEY:
         with open(env_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip().startswith("OPENAI_API_KEY"):
-                    key = line.strip().split("=", 1)[1].strip()
+                    key = line.strip().split("=", 1)[1].strip().strip('"')
                     if key:
                         OPENAI_API_KEY = key
                     break
@@ -121,7 +121,6 @@ def regenerate_unique_post(
         except Exception as e:
             from openai.lib._old_api import APIRemovedInV1
             if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-                # fallback to the same openai module
                 resp = openai.ChatCompletion.create(
                     model=model_name,
                     messages=msgs,
@@ -236,24 +235,31 @@ def process_regeneration():
     total = 0
     prompts = prompt_ws.get_all_values()[1:]
     for i, cfg in enumerate(prompts, start=2):
+        # run_count 범위 체크
         if len(cfg) <= run_idx:
             continue
-        if cfg[col_map["출처"]].strip() != "스크랩 시트" or cfg[col_map["현재사용여부"]].strip().upper() != "Y":
+
+        # 출처 & 현재사용여부 필터
+        if cfg[col_map["출처"]].strip() != "스크랩 시트" \
+           or cfg[col_map["현재사용여부"]].strip().upper() != "Y":
             continue
 
+        # 구분태그 빈칸 체크
         category = cfg[col_map["구분태그"]].strip()
         if not category:
+            logging.info(f"[행 {i}] 구분태그가 비어 있어 건너뜁니다.")
             continue
 
-          # 같은 구분태그를 가진 스크랩 행만 골라내기
+        # 같은 구분태그를 가진 스크랩 행만 골라내기
         valid_rows = [
             row for row in rows
             if len(row) > src_col_map["구분태그"]
                and row[src_col_map["구분태그"]].strip() == category
         ]
+        # 매칭되는 스크랩이 없으면 전체 중단
         if not valid_rows:
-            logging.info(f"⚠️ '{category}' 구분태그에 해당하는 스크랩 콘텐츠가 없습니다. 건너뜁니다.")
-            continue
+            logging.warning(f"[행 {i}] '{category}'에 해당하는 스크랩 콘텐츠가 없습니다. 전체 처리 중지.")
+            return 0
 
         item     = random.choice(valid_rows)
         existing = [r[src_col_map["요약"]] for r in valid_rows]
@@ -278,7 +284,6 @@ def process_regeneration():
 
         orig_title = item[src_col_map["제목"]]
         orig_cont  = item[src_col_map["요약"]]
-        existing = [r[src_col_map["요약"]] for r in rows]
 
         content, score, _ = regenerate_unique_post(
             orig_title, orig_cont, existing, prompt_cfg, use_model
