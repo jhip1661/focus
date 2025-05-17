@@ -215,10 +215,18 @@ def process_regeneration():
         category = cfg[col_map["구분태그"]].strip()
         if not category:
             continue
+          # 같은 구분태그를 가진 스크랩 행만 골라내기
+        valid_rows = [
+            row for row in rows
+            if len(row) > src_col_map["구분태그"]
+               and row[src_col_map["구분태그"]].strip() == category
+        ]
+        if not valid_rows:
+            logging.info(f"⚠️ '{category}' 구분태그에 해당하는 스크랩 콘텐츠가 없습니다. 건너뜁니다.")
+            continue
 
-        item = random.choice(valid_rows)
-        # ✅ 기존 글 리스트에서 자기 자신 제외 (중복 생성 방지)
-        existing_texts = [r[4] for r in valid_rows if r != item]
+        item     = random.choice(valid_rows)
+        existing = [r[src_col_map["요약"]] for r in valid_rows]
 
         prompt_fields = [
             "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
