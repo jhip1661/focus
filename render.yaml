@@ -7,34 +7,6 @@ services:
     startCommand: "python raindrop.py"
 
   - type: cron
-    name: run-publi-ad
-    schedule: "5 */3 * * *"  # 매 3시간마다 5분
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python publi_ad.py"
-
-  - type: cron
-    name: run-xls
-    schedule: "10 */3 * * *"  # 매 3시간마다 10분
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python xls.py"
-
-  - type: cron
-    name: run-image
-    schedule: "15 */3 * * *"  # 매 3시간마다 15분
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python image.py"
-
-  - type: cron
-    name: run-publi-sup
-    schedule: "20 */3 * * *"  # 매 3시간마다 20분
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python publi_sup.py"
-
-  - type: cron
     name: run-nav
     schedule: "20 */3 * * *"  # 매 3시간마다 20분
     env: python
