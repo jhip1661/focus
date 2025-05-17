@@ -1,28 +1,15 @@
-services:
-  - type: cron
-    name: run-raindrop
-    schedule: "0 */3 * * *"  # 매 3시간마다 정각
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python raindrop.py"
-
-  - type: cron
-    name: run-nav
-    schedule: "20 */3 * * *"  # 매 3시간마다 20분
-    env: python
-    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
-    startCommand: "python nav.py"
-
   - type: cron
     name: run-marketing
-    schedule: "0 * * * *"    # 매 시간 정각
+    region: seoul           # ← 리전 설정 추가
+    schedule: "0 * * * *"   # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python marketing.py"
 
   - type: cron
     name: run-information
-    schedule: "0 * * * *"    # 매 시간 정각
+    region: seoul           # ← 리전 설정 추가
+    schedule: "0 * * * *"   # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python information.py"
