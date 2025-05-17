@@ -1,10 +1,10 @@
 # render.yaml
 
-# (선택) 버전 명시
-version: 2
+# (선택) 이 파일이 Render v1 스펙임을 명시
+version: 1
 
-# ── Cron Job 들을 모아두는 최상위 키 ────────────────────────
-cronJobs:
+# ── 모든 Job 정의를 이 아래에 넣습니다 ──────────────────────
+jobs:
   - type: cron
     name: run-marketing
     region: seoul
