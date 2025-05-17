@@ -5,7 +5,7 @@ version: 1
 services:
   - type: cron
     name: run-marketing
-    region: seoul
+    region: singapore
     schedule: "0 * * * *"    # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
@@ -13,7 +13,7 @@ services:
 
   - type: cron
     name: run-information
-    region: seoul
+    region: singapore
     schedule: "0 * * * *"    # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
