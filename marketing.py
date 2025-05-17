@@ -95,6 +95,8 @@ def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List
 
 def regenerate_unique_post(original_title: str, original: str, existing_texts: List[str], prompt_cfg: List[str], model_name: str) -> Tuple[str, float, int]:
     regen, score = original, 1.0
+    threshold = 0.6  # ✅ 60% 이하로 기본 설정
+
     for i in range(1, MAX_RETRIES + 1):
         msgs = build_messages_from_prompt(prompt_cfg, original_title, original)
         etc_lower = prompt_cfg[-1].lower()
@@ -103,6 +105,7 @@ def regenerate_unique_post(original_title: str, original: str, existing_texts: L
             max_tokens = 2500
         elif '2000자' in etc_lower:
             max_tokens = 2000
+
         try:
             resp = client.ChatCompletion.create(
                 model=model_name,
@@ -116,10 +119,31 @@ def regenerate_unique_post(original_title: str, original: str, existing_texts: L
 
         candidate = clean_content(resp.choices[0].message.content or '')
         sim = max((calculate_similarity(candidate, ex) for ex in existing_texts), default=0)
-        if sim < SIMILARITY_THRESHOLD:
+        if sim < threshold:
             return candidate, sim, i
         regen, score = candidate, sim
-    return regen, score, MAX_RETRIES
+
+    # ✅ MAX_RETRIES 도달 시, 표절률 기준을 0.7(70%)로 완화해 한 번 더 시도
+    logging.info(f"🔁 MAX_RETRIES 도달 - 표절률 기준을 0.7로 완화하여 재시도: {original_title}")
+    for i in range(1, MAX_RETRIES + 1):
+        try:
+            resp = client.ChatCompletion.create(
+                model=model_name,
+                messages=msgs,
+                temperature=0.8,
+                max_tokens=max_tokens,
+            )
+        except Exception as e:
+            logging.warning(f"⚠️ GPT 최종 요청 실패 (표절률 70% 기준, 시도 {i}): {e}")
+            continue
+
+        candidate = clean_content(resp.choices[0].message.content or '')
+        sim = max((calculate_similarity(candidate, ex) for ex in existing_texts), default=0)
+        if sim < 0.7:
+            return candidate, sim, MAX_RETRIES + i
+        regen, score = candidate, sim
+
+    return regen, score, MAX_RETRIES * 2
 
 def regenerate_title(content: str) -> str:
     resp = client.ChatCompletion.create(
@@ -236,6 +260,7 @@ def process_regeneration():
         zh = translate_text(content, 'Chinese')
         ja = translate_text(content, 'Japanese')
 
+        
         info_ws.append_row([
             now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
         ])
