@@ -35,12 +35,10 @@ SCOPES = [
 ]
 gs_creds = GCredentials.from_service_account_info(creds_info, scopes=SCOPES)
 
-# ✅ OpenAI API 키 설정 (기존 코드 유지)
+# ✅ OpenAI API 키 설정
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     OPENAI_API_KEY = os.getenv("OPENAI_KEY") or os.getenv("OPENAI_SECRET")
-
-# ── 추가: .env 파일이 있으면 여기서도 로드 ───────────────────────────────────────
 if not OPENAI_API_KEY:
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     if os.path.exists(env_path):
@@ -51,13 +49,12 @@ if not OPENAI_API_KEY:
                     if key:
                         OPENAI_API_KEY = key
                     break
-
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 누락되었습니다.")
 openai.api_key = OPENAI_API_KEY
 client = openai
 
-# ── 설정정보시트로부터 SOURCE_DB_ID, TARGET_DB_ID 로드 ───────────────────────────
+# ── 설정정보시트 로드 ─────────────────────────────────────────────
 CONFIG_SHEET_ID = "1h8FcZcDPFsCsdnHaLhDvr8WI2mQpd9raU0YLZ7KW8_8"
 config_sheet = gspread.authorize(gs_creds).open_by_key(CONFIG_SHEET_ID).sheet1
 config = config_sheet.get_all_records()[0]
@@ -66,9 +63,11 @@ posting_db_url = config.get("포스팅 DB 주소")
 SOURCE_DB_ID = re.search(r"/d/([a-zA-Z0-9-_]+)", input_db_url).group(1) if input_db_url else None
 TARGET_DB_ID = re.search(r"/d/([a-zA-Z0-9-_]+)", posting_db_url).group(1) if posting_db_url else None
 
-# 상수 정의
+# ✅ 번역용 GPT 모델: 가장 저렴한 모델로 하드코딩
+TRANSLATION_MODEL = "gpt-3.5-turbo"
+
 SIMILARITY_THRESHOLD = 0.5
-MAX_RETRIES          = 5
+MAX_RETRIES = 5
 
 def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     ws = gspread.authorize(gs_creds).open_by_key(sheet_id).worksheet(sheet_name)
@@ -94,13 +93,7 @@ def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List
         {"role": "user",   "content": user.strip()},
     ]
 
-def regenerate_unique_post(
-    original_title: str,
-    original: str,
-    existing_texts: List[str],
-    prompt_cfg: List[str],
-    model_name: str,
-) -> Tuple[str, float, int]:
+def regenerate_unique_post(original_title: str, original: str, existing_texts: List[str], prompt_cfg: List[str], model_name: str) -> Tuple[str, float, int]:
     regen, score = original, 1.0
     for i in range(1, MAX_RETRIES + 1):
         msgs = build_messages_from_prompt(prompt_cfg, original_title, original)
@@ -110,7 +103,6 @@ def regenerate_unique_post(
             max_tokens = 2500
         elif '2000자' in etc_lower:
             max_tokens = 2000
-
         try:
             resp = client.ChatCompletion.create(
                 model=model_name,
@@ -119,84 +111,40 @@ def regenerate_unique_post(
                 max_tokens=max_tokens,
             )
         except Exception as e:
-            from openai.lib._old_api import APIRemovedInV1
-            if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-                # fallback to the same openai module
-                resp = openai.ChatCompletion.create(
-                    model=model_name,
-                    messages=msgs,
-                    temperature=0.8,
-                    max_tokens=max_tokens,
-                )
-            else:
-                raise
+            logging.warning(f"⚠️ GPT 요청 실패 (시도 {i}): {e}")
+            continue
 
         candidate = clean_content(resp.choices[0].message.content or '')
         sim = max((calculate_similarity(candidate, ex) for ex in existing_texts), default=0)
         if sim < SIMILARITY_THRESHOLD:
             return candidate, sim, i
         regen, score = candidate, sim
-
     return regen, score, MAX_RETRIES
 
 def regenerate_title(content: str) -> str:
-    try:
-        resp = client.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
-                {"role": "user",   "content": content[:1000]},
-            ],
-            temperature=0.7,
-            max_tokens=800,
-        )
-    except Exception as e:
-        from openai.lib._old_api import APIRemovedInV1
-        if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-            new_client = OpenAI(api_key=openai.api_key)
-            resp = new_client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[
-                    {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
-                    {"role": "user",   "content": content[:1000]},
-                ],
-                temperature=0.7,
-                max_tokens=800,
-            )
-        else:
-            raise
+    resp = client.ChatCompletion.create(
+        model="gpt-4-turbo",
+        messages=[
+            {"role": "system", "content": "너는 마케팅 콘텐츠 전문가야. 짧은 제목을 작성해줘."},
+            {"role": "user", "content": content[:1000]},
+        ],
+        temperature=0.7,
+        max_tokens=800,
+    )
     return re.sub(r'^.*?:\s*', '', resp.choices[0].message.content.strip())
 
 def translate_text(text: str, lang: str) -> str:
-    try:
-        resp = client.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": f"다음을 {lang}로 번역해줘."},
-                {"role": "user",   "content": text},
-            ],
-            temperature=0.5,
-            max_tokens=2000,
-        )
-    except Exception as e:
-        from openai.lib._old_api import APIRemovedInV1
-        if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-            new_client = OpenAI(api_key=openai.api_key)
-            resp = new_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": f"다음을 {lang}로 번역해줘."},
-                    {"role": "user",   "content": text},
-                ],
-                temperature=0.5,
-                max_tokens=2000,
-            )
-        else:
-            raise
+    # ✅ 항상 gpt-3.5-turbo 사용하도록 하드코딩
+    resp = client.ChatCompletion.create(
+        model=TRANSLATION_MODEL,
+        messages=[
+            {"role": "system", "content": f"다음을 {lang}로 번역해줘."},
+            {"role": "user",   "content": text},
+        ],
+        temperature=0.5,
+        max_tokens=2000,
+    )
     return resp.choices[0].message.content.strip()
-
-def find_matching_image(tags: List[str], image_ws) -> str:
-    return ""  # 사용되지 않음
 
 def now_str() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -205,31 +153,11 @@ def process_regeneration():
     logging.basicConfig(level=logging.INFO)
     logging.info("📌 process_regeneration() 시작")
 
-    src_ws    = init_worksheet(SOURCE_DB_ID, "홍보시트")
+    src_ws = init_worksheet(SOURCE_DB_ID, "홍보시트")
     prompt_ws = init_worksheet(SOURCE_DB_ID, "프롬프트시트")
-    image_ws  = init_worksheet(SOURCE_DB_ID, "이미지 시트")
-    info_ws   = init_worksheet(TARGET_DB_ID, "홍보시트")
+    image_ws = init_worksheet(SOURCE_DB_ID, "이미지 시트")
+    info_ws = init_worksheet(TARGET_DB_ID, "홍보시트")
 
-    # 프롬프트시트 헤더 읽어서 동적 컬럼 매핑
-    prompt_header = prompt_ws.row_values(1)
-    col_map = {name: idx for idx, name in enumerate(prompt_header)}
-    required = [
-        "생성일자", "출처", "이미지태그", "구분태그", "현재사용여부",
-        "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
-        "필수 포함 항목", "마무리 문장", "추가 지시사항",
-        "GPT 모델방식", "글 간격", "기본 gpt", "고급 gpt"
-    ]
-    for c in required:
-        if c not in col_map:
-            raise RuntimeError(f"⚠️ 프롬프트시트에 '{c}' 컬럼이 없습니다.")
-    if "run_count" not in col_map:
-        prompt_ws.add_cols(1)
-        prompt_ws.update_cell(1, len(prompt_header) + 1, "run_count")
-        col_map["run_count"] = len(prompt_header)
-        prompt_header.append("run_count")
-    run_idx = col_map["run_count"]
-
-    # 마감일 필터링
     rows = src_ws.get_all_values()[1:]
     today = datetime.datetime.now().date()
     valid_rows = []
@@ -247,8 +175,9 @@ def process_regeneration():
         return 0
 
     total = 0
-    src_header  = src_ws.row_values(1)
-    src_col_map = {name: idx for idx, name in enumerate(src_header)}
+    prompt_header = prompt_ws.row_values(1)
+    col_map = {name: idx for idx, name in enumerate(prompt_header)}
+    run_idx = col_map.get("run_count", len(prompt_header))
 
     prompts = prompt_ws.get_all_values()[1:]
     for i, cfg in enumerate(prompts, start=2):
@@ -259,26 +188,13 @@ def process_regeneration():
             cfg[col_map["현재사용여부"]].strip().upper() != "Y"
         ):
             continue
-
-        # 구분태그
         category = cfg[col_map["구분태그"]].strip()
         if not category:
             continue
 
-        # 랜덤 콘텐츠 선택
         item = random.choice(valid_rows)
-
-        prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
-        interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
-        basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
-        adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
-
-        if prev_count < interval:
-            use_model = basic_mod
-            new_count = prev_count + 1
-        else:
-            use_model = adv_mod
-            new_count = 0
+        # ✅ 기존 글 리스트에서 자기 자신 제외 (중복 생성 방지)
+        existing_texts = [r[4] for r in valid_rows if r != item]
 
         prompt_fields = [
             "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
@@ -287,21 +203,26 @@ def process_regeneration():
         prompt_cfg = [cfg[col_map[f]] for f in prompt_fields]
 
         orig_title = item[0]
-        orig_cont  = item[4]
+        orig_cont = item[4]
+
+        prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
+        interval = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
+        basic_mod = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
+        adv_mod = cfg[col_map["고급 gpt"]].strip() or basic_mod
+        use_model = basic_mod if prev_count < interval else adv_mod
+        new_count = prev_count + 1 if prev_count < interval else 0
+
         content, score, _ = regenerate_unique_post(
-            orig_title, orig_cont,
-            [r[4] for r in valid_rows],
-            prompt_cfg, use_model
+            orig_title, orig_cont, existing_texts, prompt_cfg, use_model
         )
         title = regenerate_title(content)
 
-        # 이미지 URL 매칭: prompt시트 '이미지태그' vs 이미지시트 '이미지태그'
         image_tag = cfg[col_map["이미지태그"]].strip()
-        img = ""
-        img_header  = image_ws.row_values(1)
+        img_header = image_ws.row_values(1)
         img_col_map = {name: idx for idx, name in enumerate(img_header)}
         d_idx = img_col_map.get("이미지태그")
         c_idx = img_col_map.get("이미지url")
+        img = ""
         if d_idx is not None and c_idx is not None and image_tag:
             candidates = [
                 row[c_idx].strip() for row in image_ws.get_all_values()[1:]
@@ -315,21 +236,12 @@ def process_regeneration():
         zh = translate_text(content, 'Chinese')
         ja = translate_text(content, 'Japanese')
 
-        # 결과 저장: D열에 구분태그, I열에 이미지url
         info_ws.append_row([
-            now_str(),          # A
-            title,              # B
-            content,            # C
-            category,           # D: 구분태그
-            en,                 # E
-            zh,                 # F
-            ja,                 # G
-            f"{score:.2f}",     # H
-            img                 # I: 이미지url
+            now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
         ])
 
-        total += 1
         prompt_ws.update_cell(i, run_idx + 1, str(new_count))
+        total += 1
 
     logging.info(f"💰 총 저장된 글 수: {total}")
     return total
