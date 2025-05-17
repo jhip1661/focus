@@ -50,7 +50,7 @@ if not OPENAI_API_KEY:
                     key = line.strip().split("=", 1)[1].strip().strip('"')
                     if key:
                         OPENAI_API_KEY = key
-                    break
+                        break
 
 if not OPENAI_API_KEY:
     raise ValueError("❌ 환경변수 'OPENAI_API_KEY'가 누락되었습니다.")
@@ -83,7 +83,7 @@ def calculate_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 def clean_content(text: str) -> str:
-    return re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)[:\-]?\s*', '', text).strip()
+    return re.sub(r'(?m)^(서론|문제 상황|실무 팁|결론)\[:-]?\s\*', '', text).strip()
 
 def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List[dict]:
     purpose, tone, para, emphasis, fmt, etc = cfg
@@ -152,7 +152,7 @@ def regenerate_title(content: str) -> str:
     except Exception as e:
         from openai.lib._old_api import APIRemovedInV1
         if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-            new_client = OpenAI(api_key=openai.api_key)
+            new_client = openai.OpenAI(api_key=openai.api_key)
             resp = new_client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[
@@ -180,7 +180,7 @@ def translate_text(text: str, lang: str) -> str:
     except Exception as e:
         from openai.lib._old_api import APIRemovedInV1
         if isinstance(e, APIRemovedInV1) or isinstance(e, AttributeError):
-            new_client = OpenAI(api_key=openai.api_key)
+            new_client = openai.OpenAI(api_key=openai.api_key)
             resp = new_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -234,97 +234,96 @@ def process_regeneration():
 
     total = 0
     prompts = prompt_ws.get_all_values()[1:]
-    for i, cfg in enumerate(prompts, start=2):
-        # run_count 범위 체크
-        if len(cfg) <= run_idx:
-            return 0  # 중단
 
-        # ─── 출처·사용여부·구분태그 3개 모두 일치하지 않으면 즉시 중단 ────────────────────
+    # ◆수정: 먼저 ‘출처’, ‘현재사용여부’, ‘구분태그’가 모두 일치하는 행을 찾는다.
+    matched_idx = None
+    for i, cfg in enumerate(prompts, start=2):
         source_val = cfg[col_map["출처"]].strip()
         use_val    = cfg[col_map["현재사용여부"]].strip().upper()
         category   = cfg[col_map["구분태그"]].strip()
-        if not (source_val == "스크랩 시트" and use_val == "Y" and category):
-            logging.error(
-                f"❌ [행 {i}] 필터 조건 불일치: 출처={source_val}, 사용여부={use_val}, 구분태그={category}"
-            )
-            return 0
-        # ────────────────────────────────────────────────────────────────────────────────
+        if source_val == "스크랩 시트" and use_val == "Y" and category:
+            matched_idx = i
+            break
+    if matched_idx is None:
+        logging.error("❌ 일치하는 프롬프트 행이 없습니다. 전체 처리 중단.")
+        return 0
 
-        # 같은 구분태그를 가진 스크랩 행만 골라내기
-        valid_rows = [
-            row for row in rows
+    # ◆수정: 찾은 한 행만 처리하도록 루프 인덱스를 고정
+    i   = matched_idx
+    cfg = prompts[i - 2]
+
+    # 같은 구분태그를 가진 스크랩 행만 골라내기
+    rows = [row for row in rows
             if len(row) > src_col_map["구분태그"]
-               and row[src_col_map["구분태그"]].strip() == category
+               and row[src_col_map["구분태그"]].strip() == cfg[col_map["구분태그"]].strip()]
+    if not rows:
+        logging.warning(f"[행 {i}] '{cfg[col_map['구분태그']]}'에 해당하는 스크랩 콘텐츠가 없습니다. 전체 처리 중지.")
+        return 0
+
+    item     = random.choice(rows)
+    existing = [r[src_col_map["요약"]] for r in rows if len(r) > src_col_map["요약"]]
+
+    prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
+    interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
+    basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
+    adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
+
+    if prev_count < interval:
+        use_model = basic_mod
+        new_count = prev_count + 1
+    else:
+        use_model = adv_mod
+        new_count = 0
+
+    prompt_fields = [
+        "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
+        "필수 포함 항목", "마무리 문장", "추가 지시사항"
+    ]
+    prompt_cfg = [cfg[col_map[f]] for f in prompt_fields]
+
+    orig_title = item[src_col_map["제목"]]
+    orig_cont  = item[src_col_map["요약"]]
+
+    content, score, _ = regenerate_unique_post(
+        orig_title, orig_cont, existing, prompt_cfg, use_model
+    )
+    title = regenerate_title(content)
+
+    image_tag = cfg[col_map["이미지태그"]].strip()
+    img = ""
+    img_header  = image_ws.row_values(1)
+    img_col_map = {name: idx for idx, name in enumerate(img_header)}
+    d_idx = img_col_map.get("이미지태그")
+    c_idx = img_col_map.get("이미지url")
+    if d_idx is not None and c_idx is not None and image_tag:
+        candidates = [
+            row[c_idx].strip() for row in image_ws.get_all_values()[1:]
+            if len(row) > d_idx and row[d_idx].strip() == image_tag
+               and len(row) > c_idx and row[c_idx].strip()
         ]
-        # 매칭되는 스크랩이 없으면 전체 중단
-        if not valid_rows:
-            logging.warning(f"[행 {i}] '{category}'에 해당하는 스크랩 콘텐츠가 없습니다. 전체 처리 중지.")
-            return 0
+        if candidates:
+            img = random.choice(candidates)
 
-        item     = random.choice(valid_rows)
-        existing = [r[src_col_map["요약"]] for r in valid_rows]
+    en = translate_text(content, 'English')
+    zh = translate_text(content, 'Chinese')
+    ja = translate_text(content, 'Japanese')
 
-        prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
-        interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
-        basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
-        adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
+    info_ws.append_row([
+        now_str(),       # A: 작성일시
+        cfg[col_map["구분태그"]].strip(),  # B: 구분태그
+        "",              # C: 사이트 분류 (빈칸)
+        title,           # D: 제목
+        content,         # E: 내용
+        image_tag,       # F: 이미지태그
+        en,              # G: 영문
+        zh,              # H: 중문
+        ja,              # I: 일문
+        f"{score:.2f}",  # J: 표절률
+        img              # K: 이미지url
+    ])
 
-        if prev_count < interval:
-            use_model = basic_mod
-            new_count = prev_count + 1
-        else:
-            use_model = adv_mod
-            new_count = 0
-
-        prompt_fields = [
-            "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
-            "필수 포함 항목", "마무리 문장", "추가 지시사항"
-        ]
-        prompt_cfg = [cfg[col_map[f]] for f in prompt_fields]
-
-        orig_title = item[src_col_map["제목"]]
-        orig_cont  = item[src_col_map["요약"]]
-
-        content, score, _ = regenerate_unique_post(
-            orig_title, orig_cont, existing, prompt_cfg, use_model
-        )
-        title = regenerate_title(content)
-
-        image_tag = cfg[col_map["이미지태그"]].strip()
-        img = ""
-        img_header  = image_ws.row_values(1)
-        img_col_map = {name: idx for idx, name in enumerate(img_header)}
-        d_idx = img_col_map.get("이미지태그")
-        c_idx = img_col_map.get("이미지url")
-        if d_idx is not None and c_idx is not None and image_tag:
-            candidates = [
-                row[c_idx].strip() for row in image_ws.get_all_values()[1:]
-                if len(row) > d_idx and row[d_idx].strip() == image_tag
-                   and len(row) > c_idx and row[c_idx].strip()
-            ]
-            if candidates:
-                img = random.choice(candidates)
-
-        en = translate_text(content, 'English')
-        zh = translate_text(content, 'Chinese')
-        ja = translate_text(content, 'Japanese')
-
-        info_ws.append_row([
-            now_str(),       # A: 작성일시
-            category,        # B: 구분태그
-            "",              # C: 사이트 분류 (빈칸)
-            title,           # D: 제목
-            content,         # E: 내용
-            image_tag,       # F: 이미지태그
-            en,              # G: 영문
-            zh,              # H: 중문
-            ja,              # I: 일문
-            f"{score:.2f}",  # J: 표절률
-            img              # K: 이미지url
-        ])
-
-        total += 1
-        prompt_ws.update_cell(i, run_idx + 1, str(new_count))
+    prompt_ws.update_cell(i, run_idx + 1, str(new_count))
+    total += 1
 
     logging.info(f"💰 총 저장된 글 수: {total}")
     return total
