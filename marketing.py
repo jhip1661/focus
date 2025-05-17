@@ -45,7 +45,7 @@ if not OPENAI_API_KEY:
         with open(env_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip().startswith("OPENAI_API_KEY"):
-                    key = line.strip().split("=", 1)[1].strip()
+                    key = line.strip().split("=", 1)[1].strip().strip('"')
                     if key:
                         OPENAI_API_KEY = key
                     break
@@ -74,7 +74,6 @@ def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     if header:
         first = ws.get_all_values()[:1]
         if not first or all(cell == "" for cell in first[0]):
-            # ✅ 기존 데이터가 있을 경우 삭제하지 않고 헤더만 추가
             ws.append_row(header)
     return ws
 
@@ -90,7 +89,7 @@ def build_messages_from_prompt(cfg: List[str], title: str, content: str) -> List
     user = f"다음 글을 중복되지 않도록 재작성해줘:\n\n제목: {title}\n내용: {content}"
     return [
         {"role": "system", "content": system.strip()},
-        {"role": "user",   "content": user.strip()},
+        {"role": "user", "content": user.strip()},
     ]
 
 def regenerate_unique_post(original_title: str, original: str, existing_texts: List[str], prompt_cfg: List[str], model_name: str) -> Tuple[str, float, int]:
@@ -158,12 +157,11 @@ def regenerate_title(content: str) -> str:
     return re.sub(r'^.*?:\s*', '', resp.choices[0].message.content.strip())
 
 def translate_text(text: str, lang: str) -> str:
-    # ✅ 항상 gpt-3.5-turbo 사용하도록 하드코딩
     resp = client.ChatCompletion.create(
         model=TRANSLATION_MODEL,
         messages=[
             {"role": "system", "content": f"다음을 {lang}로 번역해줘."},
-            {"role": "user",   "content": text},
+            {"role": "user", "content": text},
         ],
         temperature=0.5,
         max_tokens=2000,
@@ -186,6 +184,7 @@ def process_regeneration():
     src_header  = src_ws.row_values(1)
     src_col_map = {name: idx for idx, name in enumerate(src_header)}
 
+    # ── 스크랩 데이터(날짜 필터링)
     rows  = src_ws.get_all_values()[1:]
     today = datetime.datetime.now().date()
     filtered_rows = []
@@ -202,89 +201,93 @@ def process_regeneration():
         logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다.")
         return 0
 
-    total = 0
-    prompt_header = prompt_ws.row_values(1)
-    col_map       = {name: idx for idx, name in enumerate(prompt_header)}
-    run_idx       = col_map.get("run_count", len(prompt_header))
+    # ── 프롬프트시트에서 3개 조건 모두 일치하는 행 찾기 (수정)
+    prompt_header    = prompt_ws.row_values(1)
+    col_map          = {name: idx for idx, name in enumerate(prompt_header)}
+    run_idx          = col_map.get("run_count", len(prompt_header))
+    all_prompts      = prompt_ws.get_all_values()[1:]
+    matching_prompts = [
+        cfg for cfg in all_prompts
+        if len(cfg) > run_idx
+           and cfg[col_map["출처"]].strip() == "홍보시트"
+           and cfg[col_map["현재사용여부"]].strip().upper() == "Y"
+           and cfg[col_map["구분태그"]].strip()
+    ]
+    if not matching_prompts:
+        # 수정: 조건에 맞는 프롬프트가 하나도 없으면 전체 중단
+        raise RuntimeError("❌ 프롬프트가 존재하지 않습니다: 출처·사용여부·구분태그 모두 일치하는 행을 찾을 수 없습니다.")
+    # 수정: 첫 번째 프롬프트만 사용
+    cfg      = matching_prompts[0]
+    category = cfg[col_map["구분태그"]].strip()
 
-    prompts = prompt_ws.get_all_values()[1:]
-    for i, cfg in enumerate(prompts, start=2):
-        if len(cfg) <= run_idx:
-            continue
+    # ── 해당 카테고리 콘텐츠 한 건 선택
+    valid_rows     = [
+        row for row in filtered_rows
+        if len(row) > src_col_map["구분태그"]
+           and row[src_col_map["구분태그"]].strip() == category
+    ]
+    if not valid_rows:
+        logging.warning(f"⚠️ '{category}'에 해당하는 스크랩 콘텐츠가 없습니다.")
+        return 0
+    item           = random.choice(valid_rows)
+    existing_texts = [r[src_col_map["요약"]] for r in valid_rows]
 
-        # ─── 출처, 사용여부, 구분태그 세 조건 모두 일치하지 않으면 즉시 중단 ────────────────────
-        source_val = cfg[col_map["출처"]].strip()
-        use_val    = cfg[col_map["현재사용여부"]].strip().upper()
-        category   = cfg[col_map["구분태그"]].strip()
-        if not (source_val == "홍보시트" and use_val == "Y" and category):
-            logging.error(
-                f"❌ 프롬프트 설정 오류: 출처='{source_val}', 현재사용여부='{use_val}', 구분태그='{category}' 모두 일치해야 합니다."
-            )
-            raise RuntimeError("프롬프트 필터 조건 불일치로 작업을 중단합니다.")
-        # ────────────────────────────────────────────────────────────────────────────────
+    # ── 프롬프트 구성
+    prompt_fields = [
+        "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
+        "필수 포함 항목", "마무리 문장", "추가 지시사항"
+    ]
+    prompt_cfg    = [cfg[col_map[f]] for f in prompt_fields]
 
-        # 해당 카테고리에 맞는 행만 추출
-        matching_rows = [
-            row for row in filtered_rows
-            if len(row) > src_col_map["구분태그"]
-               and row[src_col_map["구분태그"]].strip() == category
+    # ── 글 생성 파라미터 계산
+    orig_title = item[0]
+    orig_cont  = item[4]
+    prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
+    interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
+    basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
+    adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
+    use_model  = basic_mod if prev_count < interval else adv_mod
+    new_count  = prev_count + 1 if prev_count < interval else 0
+
+    content, score, _ = regenerate_unique_post(
+        orig_title, orig_cont, existing_texts, prompt_cfg, use_model
+    )
+    title = regenerate_title(content)
+
+    # ── 이미지 태그 매칭
+    image_tag = cfg[col_map["이미지태그"]].strip()
+    img_header  = image_ws.row_values(1)
+    img_col_map = {name: idx for idx, name in enumerate(img_header)}
+    d_idx = img_col_map.get("이미지태그")
+    c_idx = img_col_map.get("이미지url")
+    img   = ""
+    if d_idx is not None and c_idx is not None and image_tag:
+        candidates = [
+            row[c_idx].strip() for row in image_ws.get_all_values()[1:]
+            if len(row) > d_idx and row[d_idx].strip() == image_tag
+               and len(row) > c_idx and row[c_idx].strip()
         ]
-        if not matching_rows:
-            logging.info(f"⚠️ '{category}' 구분태그에 해당하는 스크랩 콘텐츠가 없습니다. 건너뜁니다.")
-            continue
+        if candidates:
+            img = random.choice(candidates)
 
-        item           = random.choice(matching_rows)
-        existing_texts = [r[src_col_map["요약"]] for r in matching_rows]
+    # ── 다국어 번역
+    en = translate_text(content, 'English')
+    zh = translate_text(content, 'Chinese')
+    ja = translate_text(content, 'Japanese')
 
-        prompt_fields = [
-            "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
-            "필수 포함 항목", "마무리 문장", "추가 지시사항"
-        ]
-        prompt_cfg = [cfg[col_map[f]] for f in prompt_fields]
+    # ── 결과 기록
+    info_ws.append_row([
+        now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
+    ])
+    # 수정: run_count 업데이트
+    prompt_ws.update_cell(
+        all_prompts.index(cfg) + 2,  # 실제 시트 행 번호
+        run_idx + 1,
+        str(new_count)
+    )
 
-        orig_title = item[0]
-        orig_cont  = item[4]
-
-        prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
-        interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
-        basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
-        adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
-        use_model  = basic_mod if prev_count < interval else adv_mod
-        new_count  = prev_count + 1 if prev_count < interval else 0
-
-        content, score, _ = regenerate_unique_post(
-            orig_title, orig_cont, existing_texts, prompt_cfg, use_model
-        )
-        title = regenerate_title(content)
-
-        image_tag = cfg[col_map["이미지태그"]].strip()
-        img_header = image_ws.row_values(1)
-        img_col_map = {name: idx for idx, name in enumerate(img_header)}
-        d_idx = img_col_map.get("이미지태그")
-        c_idx = img_col_map.get("이미지url")
-        img = ""
-        if d_idx is not None and c_idx is not None and image_tag:
-            candidates = [
-                row[c_idx].strip() for row in image_ws.get_all_values()[1:]
-                if len(row) > d_idx and row[d_idx].strip() == image_tag
-                   and len(row) > c_idx and row[c_idx].strip()
-            ]
-            if candidates:
-                img = random.choice(candidates)
-
-        en = translate_text(content, 'English')
-        zh = translate_text(content, 'Chinese')
-        ja = translate_text(content, 'Japanese')
-
-        info_ws.append_row([
-            now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
-        ])
-
-        prompt_ws.update_cell(i, run_idx + 1, str(new_count))
-        total += 1
-
-    logging.info(f"💰 총 저장된 글 수: {total}")
-    return total
+    logging.info("💰 한 건의 마케팅 콘텐츠가 성공적으로 생성되었습니다.")
+    return 1
 
 if __name__ == "__main__":
     process_regeneration()
