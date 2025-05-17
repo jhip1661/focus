@@ -1,15 +1,22 @@
+# render.yaml
+
+# (선택) 버전 명시
+version: 2
+
+# ── Cron Job 들을 모아두는 최상위 키 ────────────────────────
+cronJobs:
   - type: cron
     name: run-marketing
-    region: seoul           # ← 리전 설정 추가
-    schedule: "0 * * * *"   # 매 시간 정각
+    region: seoul
+    schedule: "0 * * * *"    # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python marketing.py"
 
   - type: cron
     name: run-information
-    region: seoul           # ← 리전 설정 추가
-    schedule: "0 * * * *"   # 매 시간 정각
+    region: seoul
+    schedule: "0 * * * *"    # 매 시간 정각
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python information.py"
