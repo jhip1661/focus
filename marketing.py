@@ -74,7 +74,7 @@ def init_worksheet(sheet_id: str, sheet_name: str, header: List[str] = None):
     if header:
         first = ws.get_all_values()[:1]
         if not first or all(cell == "" for cell in first[0]):
-            ws.clear()
+            # ✅ 기존 데이터가 있을 경우 삭제하지 않고 헤더만 추가
             ws.append_row(header)
     return ws
 
