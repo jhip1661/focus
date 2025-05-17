@@ -201,6 +201,13 @@ def process_regeneration():
         logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다.")
         return 0
 
+    # ── valid_rows 와 item 정의 추가
+    valid_rows = filtered_rows  # 수정: 필터링된 행을 valid_rows로 지정
+    item = random.choice(valid_rows)  # 수정: 랜덤으로 아이템 선택
+
+    # ── 기존 글 리스트에서 자기 자신 제외 (중복 생성 방지)
+    existing_texts = [r[4] for r in valid_rows if r != item]  # 수정: '요약' 열을 헤더가 아니라 인덱스 4로 고정
+
     # ── 프롬프트시트에서 3개 조건 모두 일치하는 행 찾기 (수정)
     prompt_header    = prompt_ws.row_values(1)
     col_map          = {name: idx for idx, name in enumerate(prompt_header)}
@@ -214,23 +221,9 @@ def process_regeneration():
            and cfg[col_map["구분태그"]].strip()
     ]
     if not matching_prompts:
-        # 수정: 조건에 맞는 프롬프트가 하나도 없으면 전체 중단
         raise RuntimeError("❌ 프롬프트가 존재하지 않습니다: 출처·사용여부·구분태그 모두 일치하는 행을 찾을 수 없습니다.")
-    # 수정: 첫 번째 프롬프트만 사용
     cfg      = matching_prompts[0]
     category = cfg[col_map["구분태그"]].strip()
-
-    # ── 해당 카테고리 콘텐츠 한 건 선택
-    valid_rows     = [
-        row for row in filtered_rows
-        if len(row) > src_col_map["구분태그"]
-           and row[src_col_map["구분태그"]].strip() == category
-    ]
-    if not valid_rows:
-        logging.warning(f"⚠️ '{category}'에 해당하는 스크랩 콘텐츠가 없습니다.")
-        return 0
-    item           = random.choice(valid_rows)
-    existing_texts = [r[src_col_map["요약"]] for r in valid_rows]
 
     # ── 프롬프트 구성
     prompt_fields = [
@@ -279,7 +272,8 @@ def process_regeneration():
     info_ws.append_row([
         now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
     ])
-    # 수정: run_count 업데이트
+
+    # ── run_count 업데이트
     prompt_ws.update_cell(
         all_prompts.index(cfg) + 2,  # 실제 시트 행 번호
         run_idx + 1,
