@@ -238,14 +238,25 @@ def process_regeneration():
     for i, cfg in enumerate(prompts, start=2):
         if len(cfg) <= run_idx:
             continue
-        if cfg[col_map["출처"]].strip() != "홍보시트" or cfg[col_map["현재사용여부"]].strip().upper() != "Y":
+        if cfg[col_map["출처"]].strip() != "스크랩 시트" or cfg[col_map["현재사용여부"]].strip().upper() != "Y":
             continue
 
         category = cfg[col_map["구분태그"]].strip()
         if not category:
             continue
 
-        item = random.choice(rows)
+          # 같은 구분태그를 가진 스크랩 행만 골라내기
+        valid_rows = [
+            row for row in rows
+            if len(row) > src_col_map["구분태그"]
+               and row[src_col_map["구분태그"]].strip() == category
+        ]
+        if not valid_rows:
+            logging.info(f"⚠️ '{category}' 구분태그에 해당하는 스크랩 콘텐츠가 없습니다. 건너뜁니다.")
+            continue
+
+        item     = random.choice(valid_rows)
+        existing = [r[src_col_map["요약"]] for r in valid_rows]
 
         prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
         interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
