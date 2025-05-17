@@ -177,14 +177,18 @@ def process_regeneration():
     logging.basicConfig(level=logging.INFO)
     logging.info("📌 process_regeneration() 시작")
 
-    src_ws = init_worksheet(SOURCE_DB_ID, "홍보시트")
+    src_ws    = init_worksheet(SOURCE_DB_ID, "홍보시트")
     prompt_ws = init_worksheet(SOURCE_DB_ID, "프롬프트시트")
-    image_ws = init_worksheet(SOURCE_DB_ID, "이미지 시트")
-    info_ws = init_worksheet(TARGET_DB_ID, "홍보시트")
+    image_ws  = init_worksheet(SOURCE_DB_ID, "이미지 시트")
+    info_ws   = init_worksheet(TARGET_DB_ID, "홍보시트")
 
-    rows = src_ws.get_all_values()[1:]
+    # ── 소스 시트 헤더 맵 생성
+    src_header  = src_ws.row_values(1)
+    src_col_map = {name: idx for idx, name in enumerate(src_header)}
+
+    rows  = src_ws.get_all_values()[1:]
     today = datetime.datetime.now().date()
-    valid_rows = []
+    filtered_rows = []
     for r in rows:
         norm = re.sub(r'[\.\s]+', '-', r[1].strip())
         norm = re.sub(r'-+', '-', norm)
@@ -193,40 +197,44 @@ def process_regeneration():
         except ValueError:
             continue
         if dl >= today:
-            valid_rows.append(r)
-    if not valid_rows:
+            filtered_rows.append(r)
+    if not filtered_rows:
         logging.warning("⚠️ 유효한 마케팅 콘텐츠가 없습니다.")
         return 0
 
     total = 0
     prompt_header = prompt_ws.row_values(1)
-    col_map = {name: idx for idx, name in enumerate(prompt_header)}
-    run_idx = col_map.get("run_count", len(prompt_header))
+    col_map       = {name: idx for idx, name in enumerate(prompt_header)}
+    run_idx       = col_map.get("run_count", len(prompt_header))
 
     prompts = prompt_ws.get_all_values()[1:]
     for i, cfg in enumerate(prompts, start=2):
         if len(cfg) <= run_idx:
             continue
-        if (
-            cfg[col_map["출처"]].strip() != "홍보시트" or
-            cfg[col_map["현재사용여부"]].strip().upper() != "Y"
-        ):
-            continue
-        category = cfg[col_map["구분태그"]].strip()
-        if not category:
-            continue
-          # 같은 구분태그를 가진 스크랩 행만 골라내기
-        valid_rows = [
-            row for row in rows
+
+        # ─── 출처, 사용여부, 구분태그 세 조건 모두 일치하지 않으면 즉시 중단 ────────────────────
+        source_val = cfg[col_map["출처"]].strip()
+        use_val    = cfg[col_map["현재사용여부"]].strip().upper()
+        category   = cfg[col_map["구분태그"]].strip()
+        if not (source_val == "홍보시트" and use_val == "Y" and category):
+            logging.error(
+                f"❌ 프롬프트 설정 오류: 출처='{source_val}', 현재사용여부='{use_val}', 구분태그='{category}' 모두 일치해야 합니다."
+            )
+            raise RuntimeError("프롬프트 필터 조건 불일치로 작업을 중단합니다.")
+        # ────────────────────────────────────────────────────────────────────────────────
+
+        # 해당 카테고리에 맞는 행만 추출
+        matching_rows = [
+            row for row in filtered_rows
             if len(row) > src_col_map["구분태그"]
                and row[src_col_map["구분태그"]].strip() == category
         ]
-        if not valid_rows:
+        if not matching_rows:
             logging.info(f"⚠️ '{category}' 구분태그에 해당하는 스크랩 콘텐츠가 없습니다. 건너뜁니다.")
             continue
 
-        item     = random.choice(valid_rows)
-        existing = [r[src_col_map["요약"]] for r in valid_rows]
+        item           = random.choice(matching_rows)
+        existing_texts = [r[src_col_map["요약"]] for r in matching_rows]
 
         prompt_fields = [
             "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
@@ -235,14 +243,14 @@ def process_regeneration():
         prompt_cfg = [cfg[col_map[f]] for f in prompt_fields]
 
         orig_title = item[0]
-        orig_cont = item[4]
+        orig_cont  = item[4]
 
         prev_count = int(cfg[run_idx]) if cfg[run_idx].isdigit() else 0
-        interval = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
-        basic_mod = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
-        adv_mod = cfg[col_map["고급 gpt"]].strip() or basic_mod
-        use_model = basic_mod if prev_count < interval else adv_mod
-        new_count = prev_count + 1 if prev_count < interval else 0
+        interval   = int(cfg[col_map["글 간격"]]) if cfg[col_map["글 간격"]].isdigit() else 1
+        basic_mod  = cfg[col_map["기본 gpt"]].strip() or "gpt-3.5-turbo"
+        adv_mod    = cfg[col_map["고급 gpt"]].strip() or basic_mod
+        use_model  = basic_mod if prev_count < interval else adv_mod
+        new_count  = prev_count + 1 if prev_count < interval else 0
 
         content, score, _ = regenerate_unique_post(
             orig_title, orig_cont, existing_texts, prompt_cfg, use_model
@@ -268,7 +276,6 @@ def process_regeneration():
         zh = translate_text(content, 'Chinese')
         ja = translate_text(content, 'Japanese')
 
-        
         info_ws.append_row([
             now_str(), title, content, category, en, zh, ja, f"{score:.2f}", img
         ])
