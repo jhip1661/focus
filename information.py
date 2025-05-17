@@ -207,7 +207,7 @@ def process_regeneration():
     info_ws   = init_worksheet(TARGET_DB_ID, "정보시트")
 
     prompt_header = prompt_ws.row_values(1)
-    col_map = {name: idx for idx, name in enumerate(prompt_header)}
+    col_map       = {name: idx for idx, name in enumerate(prompt_header)}
     required = [
         "생성일자", "출처", "이미지태그", "구분태그", "현재사용여부",
         "작성자 역할 설명", "전체 작성 조건", "글 구성방식",
@@ -237,18 +237,18 @@ def process_regeneration():
     for i, cfg in enumerate(prompts, start=2):
         # run_count 범위 체크
         if len(cfg) <= run_idx:
-            continue
+            return 0  # 중단
 
-        # 출처 & 현재사용여부 필터
-        if cfg[col_map["출처"]].strip() != "스크랩 시트" \
-           or cfg[col_map["현재사용여부"]].strip().upper() != "Y":
-            continue
-
-        # 구분태그 빈칸 체크
-        category = cfg[col_map["구분태그"]].strip()
-        if not category:
-            logging.info(f"[행 {i}] 구분태그가 비어 있어 건너뜁니다.")
-            continue
+        # ─── 출처·사용여부·구분태그 3개 모두 일치하지 않으면 즉시 중단 ────────────────────
+        source_val = cfg[col_map["출처"]].strip()
+        use_val    = cfg[col_map["현재사용여부"]].strip().upper()
+        category   = cfg[col_map["구분태그"]].strip()
+        if not (source_val == "스크랩 시트" and use_val == "Y" and category):
+            logging.error(
+                f"❌ [행 {i}] 필터 조건 불일치: 출처={source_val}, 사용여부={use_val}, 구분태그={category}"
+            )
+            return 0
+        # ────────────────────────────────────────────────────────────────────────────────
 
         # 같은 구분태그를 가진 스크랩 행만 골라내기
         valid_rows = [
