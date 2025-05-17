@@ -18,3 +18,11 @@ services:
     env: python
     buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
     startCommand: "python information.py"
+
+  - type: cron
+    name: run-scrap
+    region: singapore
+    schedule: "0 * * * *"    # 매 시간 정각
+    env: python
+    buildCommand: "pip install -r /opt/render/project/src/requirements.txt"
+    startCommand: "python scrap.py"
