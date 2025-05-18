@@ -14,6 +14,7 @@ from google.oauth2.service_account import Credentials as GCredentials
 from googleapiclient.discovery import build  # ── 추가: Drive API
 from googleapiclient.http import MediaIoBaseUpload  # ── 추가: Drive 업로드
 import openai  # 모듈 전체 import
+from typing import List, Tuple
 
 # ── 서비스 계정 JSON: env var 우선, 없으면 로컬 JSON 파일에서 로드 ─────────────────
 service_json = os.getenv("GSHEET_CREDENTIALS_JSON", "")
@@ -130,7 +131,7 @@ def regenerate_unique_post(
     existing_texts: List[str],
     prompt_cfg: List[str],
     model_name: str
-) -> Tuple.str, float, int]:
+) -> Tuple[str, float, int]:
     regen, score = original, 1.0
     threshold = 0.6
     max_tokens = 3000
