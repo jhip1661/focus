@@ -72,7 +72,7 @@ MAX_RETRIES = 5
 # ── PIXABAY_API_KEY: 구글 시트 D2에서 로드 ─────────────────────
 PIXABAY_SHEET_URL = (
     "https://docs.google.com/spreadsheets/d/"
-    "1-cTWVnP3sTwI_gcpuIKt1O-z1qAC8h9INp0/edit?gid=594125532"
+    "1-cTWVnP3sTwI_gcpuIKt1O-z1qAC8h9INp1kNGMoip0/edit?gid=594125532"
 )
 pixabay_sh = gspread.authorize(gs_creds).open_by_url(PIXABAY_SHEET_URL)
 pixabay_ws = pixabay_sh.worksheet("설정정보시트")
