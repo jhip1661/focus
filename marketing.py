@@ -74,7 +74,7 @@ PIXABAY_SHEET_URL = (
     "1-cTWVnP3sTwI_gcpuIKt1O-z1qAC8h9INp0/edit?gid=594125532"
 )
 pixabay_sh = gspread.authorize(gs_creds).open_by_url(PIXABAY_SHEET_URL)
-pixabay_ws = pixabay_sh.get_worksheet(0)
+pixabay_ws = pixabay_sh.worksheet("설정정보시트")
 PIXABAY_API_KEY = pixabay_ws.acell("D2").value.strip()  # ── 수정: D2 셀에서 API 키 읽기
 
 # ── 무료 한글 폰트(Noto Sans KR) 자동 다운로드 ─────────────────
